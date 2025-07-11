@@ -196,4 +196,9 @@ pub fn analyze_image_colors(img: &RgbaImage) -> (Vec<(u8, u8, u8, u32)>, FlavorN
         FlavorName::Mocha
     };
     (dominant_colors, suggested_flavor)
+}
+
+pub fn process_image_with_palette(img: &image::DynamicImage, flavor: catppuccin::FlavorName, algorithm: &str) -> image::DynamicImage {
+    // TODO: Implement actual image processing logic
+    img.clone()
 } 
