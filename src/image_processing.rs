@@ -5,8 +5,8 @@ use image::{RgbaImage, Rgba};
 use catppuccin::{PALETTE, FlavorName};
 use palette::{Lab, Srgb, IntoColor, color_difference::EuclideanDistance};
 
-pub fn generate_catppuccin_lut(flavor: FlavorName, algorithm: &str) -> Vec<u8> {
-    let colors_struct = match flavor {
+pub fn generate_catppuccin_lut(_flavor: FlavorName, _algorithm: &str) -> Vec<u8> {
+    let colors_struct = match _flavor {
         FlavorName::Latte => &PALETTE.latte.colors,
         FlavorName::Frappe => &PALETTE.frappe.colors,
         FlavorName::Macchiato => &PALETTE.macchiato.colors,
@@ -30,7 +30,7 @@ pub fn generate_catppuccin_lut(flavor: FlavorName, algorithm: &str) -> Vec<u8> {
         })
         .collect();
     let mut lut = vec![0u8; 256 * 256 * 256 * 3];
-    let (_iterations, power, use_weighted) = match algorithm {
+    let (_iterations, power, use_weighted) = match _algorithm {
         "shepards-method" => (100, 2.0, true),
         "gaussian-rbf" => (50, 1.5, true),
         "linear-rbf" => (30, 1.0, false),
@@ -198,7 +198,7 @@ pub fn analyze_image_colors(img: &RgbaImage) -> (Vec<(u8, u8, u8, u32)>, FlavorN
     (dominant_colors, suggested_flavor)
 }
 
-pub fn process_image_with_palette(img: &image::DynamicImage, flavor: catppuccin::FlavorName, algorithm: &str) -> image::DynamicImage {
+pub fn process_image_with_palette(img: &image::DynamicImage, _flavor: catppuccin::FlavorName, _algorithm: &str) -> image::DynamicImage {
     // TODO: Implement actual image processing logic
     img.clone()
 } 

@@ -4,14 +4,6 @@ use image::RgbaImage;
 use catppuccin::{PALETTE, FlavorName};
 use image::Rgba;
 
-pub enum CatppuccinFlavor {
-    Latte,
-    Frappe,
-    Macchiato,
-    Mocha,
-    // Add other variants as needed
-}
-
 pub fn generate_palette_preview(flavor: FlavorName) -> RgbaImage {
     let colors_struct = match flavor {
         FlavorName::Latte => &PALETTE.latte.colors,

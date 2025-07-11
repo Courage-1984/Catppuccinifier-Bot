@@ -1,8 +1,8 @@
+#![allow(deprecated)]
 // src/main.rs
 
 use serenity::prelude::*;
 use dotenv::dotenv;
-use std::env;
 use tracing_subscriber;
 use tracing::info;
 use serenity::framework::standard::{StandardFramework, CommandResult, Args, macros::{command, group}};
@@ -72,42 +72,19 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
 
     // Parse command arguments for flavor, algorithm, quality, format, etc.
     let mut selected_flavor = utils::parse_flavor("latte").unwrap(); // Default flavor
-    let mut has_explicit_flavor_arg = false;
     let mut selected_algorithm = "shepards-method"; // Default algorithm
-    let mut process_all_flavors = false;
-    let mut show_palette = false;
-    let mut show_comparison = false;
-    let mut show_stats = false;
     let mut _batch_mode = false; // TODO: Implement batch processing
-    let mut selected_quality = None;
-    let mut selected_format = None;
 
     if arg_string.split_whitespace().any(|arg| arg == "-f") {
-        selected_quality = Some("fast".to_string());
         selected_algorithm = "nearest-neighbor";
         let _ = msg.channel_id.say(&ctx, "⚡ Fast mode enabled! Your image will be processed using the fastest settings (nearest-neighbor algorithm).").await;
     }
 
     if parts.len() > 0 {
-        if parts[0] == "all" {
-            process_all_flavors = true;
-        } else if parts[0] == "palette" {
-            show_palette = true;
-        } else if parts[0] == "compare" {
-            show_comparison = true;
-        } else if parts[0] == "stats" {
-            show_stats = true;
-        } else if parts[0] == "batch" {
-            _batch_mode = true;
-        } else if let Some(flavor) = utils::parse_flavor(parts[0]) {
+        if let Some(flavor) = utils::parse_flavor(parts[0]) {
             selected_flavor = flavor;
-            has_explicit_flavor_arg = true;
         } else if let Some(algorithm) = utils::parse_algorithm(parts[0]) {
             selected_algorithm = algorithm;
-        } else if let Some(quality) = utils::parse_quality(parts[0]) {
-            selected_quality = Some(quality.to_string());
-        } else if let Some(format) = utils::parse_format(parts[0]) {
-            selected_format = Some(format);
         }
     }
 
@@ -163,7 +140,6 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
         let _ = msg.channel_id.say(&ctx, "Please attach an image to process.").await;
         return Ok(());
     }
-    Ok(())
 }
 
 #[tokio::main]
@@ -176,7 +152,7 @@ async fn main() {
     let intents = GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT
         | GatewayIntents::DIRECT_MESSAGES;
-    let mut framework = StandardFramework::new();
+    let framework = StandardFramework::new();
     framework.configure(serenity::framework::standard::Configuration::new().prefix("!cat"));
     let framework = framework.group(&GENERAL_GROUP);
     let mut client = Client::builder(&token, intents)
