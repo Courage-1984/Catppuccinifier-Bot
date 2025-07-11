@@ -3,10 +3,15 @@
 
 use serenity::prelude::*;
 use dotenv::dotenv;
-use tracing_subscriber;
+use tracing_subscriber::{fmt, EnvFilter};
+use std::fs::File;
+use tracing_appender::non_blocking;
 use tracing::info;
 use serenity::framework::standard::{StandardFramework, CommandResult, Args, macros::{command, group}};
 use serenity::model::channel::Message;
+use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+use tracing_subscriber::Layer;
+use tracing_subscriber::util::SubscriberInitExt;
 
 mod commands;
 mod image_processing;
@@ -32,6 +37,7 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
     if parts.get(0).map_or(false, |&p| p == "-h" || p == "--help" || p == "help") {
         if let Err(why) = crate::commands::send_help_message(ctx, msg.channel_id).await {
             error!(?why, "Error sending help message");
+            let _ = msg.channel_id.say(&ctx, "❌ Failed to send help message. Please try again later or contact the bot maintainer.").await;
         }
         return Ok(());
     }
@@ -42,31 +48,39 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
             if flavor == "all" {
                 let palette_img = palette::generate_all_palettes_preview();
                 let mut output_buffer = std::io::Cursor::new(Vec::new());
-                if let Err(_e) = palette_img.write_to(&mut output_buffer, image::ImageFormat::Png) {
-                    let _ = msg.channel_id.say(&ctx, "Failed to generate palette preview.").await;
+                if let Err(e) = palette_img.write_to(&mut output_buffer, image::ImageFormat::Png) {
+                    error!(?e, "Failed to generate all palettes preview");
+                    let _ = msg.channel_id.say(&ctx, "❌ Failed to generate palette preview. Please try again later.").await;
                     return Ok(());
                 }
                 let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), "catppuccin_palettes_all.png");
                 let message_content = "**All Catppuccin Color Palettes**\nFrom left to right: Latte, Frappe, Macchiato, Mocha";
                 let message_builder = serenity::builder::CreateMessage::new().content(message_content);
-                let _ = msg.channel_id.send_files(&ctx, vec![attachment_data], message_builder).await;
+                if let Err(e) = msg.channel_id.send_files(&ctx, vec![attachment_data], message_builder).await {
+                    error!(?e, "Failed to send all palettes preview");
+                    let _ = msg.channel_id.say(&ctx, "❌ Failed to send palette preview. Please try again later.").await;
+                }
                 return Ok(());
             } else if let Some(flavor_enum) = utils::parse_flavor(flavor) {
                 let palette_img = palette::generate_palette_preview(flavor_enum);
                 let mut output_buffer = std::io::Cursor::new(Vec::new());
-                if let Err(_e) = palette_img.write_to(&mut output_buffer, image::ImageFormat::Png) {
-                    let _ = msg.channel_id.say(&ctx, "Failed to generate palette preview.").await;
+                if let Err(e) = palette_img.write_to(&mut output_buffer, image::ImageFormat::Png) {
+                    error!(?e, "Failed to generate palette preview for flavor: {}", flavor);
+                    let _ = msg.channel_id.say(&ctx, "❌ Failed to generate palette preview. Please try again later.").await;
                     return Ok(());
                 }
                 let filename = format!("catppuccin_palette_{}.png", flavor_enum.to_string().to_lowercase());
                 let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), filename);
                 let message_content = format!("**Catppuccin {} Color Palette**", flavor_enum.to_string().to_uppercase());
                 let message_builder = serenity::builder::CreateMessage::new().content(message_content);
-                let _ = msg.channel_id.send_files(&ctx, vec![attachment_data], message_builder).await;
+                if let Err(e) = msg.channel_id.send_files(&ctx, vec![attachment_data], message_builder).await {
+                    error!(?e, "Failed to send palette preview for flavor: {}", flavor);
+                    let _ = msg.channel_id.say(&ctx, "❌ Failed to send palette preview. Please try again later.").await;
+                }
                 return Ok(());
             }
         }
-        let _ = msg.channel_id.say(&ctx, "Invalid palette command. Use `!cat palette [flavor]` or `!cat palette all`").await;
+        let _ = msg.channel_id.say(&ctx, "❌ Invalid palette command. Use `!cat palette [flavor]` or `!cat palette all`. Try `!cat help` for more info.").await;
         return Ok(());
     }
 
@@ -88,7 +102,6 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
         }
     }
 
-    // TODO: Implement all subcommands (compare, stats, batch, all flavors, etc.)
     // For now, focus on image processing for a single image attachment
     let attachment = msg.attachments.iter().find(|a| a.width.is_some() && a.height.is_some());
     if let Some(attachment) = attachment {
@@ -106,47 +119,56 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
                         let mut output_buffer = std::io::Cursor::new(Vec::new());
                         if let Err(e) = processed_img.write_to(&mut output_buffer, image::ImageFormat::Png) {
                             error!(?e, "Failed to write processed image");
-                            let _ = msg.channel_id.say(&ctx, "Failed to process image.").await;
+                            let _ = msg.channel_id.say(&ctx, "❌ Failed to process image after conversion. Please try a different image or contact the bot maintainer.").await;
                             return Ok(());
                         }
                         let filename = format!("catppuccinified_{}.png", selected_flavor.to_string().to_lowercase());
                         let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), filename);
                         let message_content = format!("**Catppuccinified with {}**", selected_flavor.to_string());
                         let message_builder = serenity::builder::CreateMessage::new().content(message_content);
-                        let _ = msg.channel_id.send_files(&ctx, vec![attachment_data], message_builder).await;
+                        if let Err(e) = msg.channel_id.send_files(&ctx, vec![attachment_data], message_builder).await {
+                            error!(?e, "Failed to send processed image");
+                            let _ = msg.channel_id.say(&ctx, "❌ Failed to send processed image. Please try again later.").await;
+                        }
                         return Ok(());
                     } else {
-                        error!("Failed to decode image");
-                        let _ = msg.channel_id.say(&ctx, "Failed to decode image.").await;
+                        error!(filename = %attachment.filename, "Failed to decode image");
+                        let _ = msg.channel_id.say(&ctx, "❌ Failed to decode the image. Please ensure your image is a supported format (PNG, JPEG, etc.) and not corrupted.").await;
                         return Ok(());
                     }
                 } else {
-                    error!("Failed to create image reader");
-                    let _ = msg.channel_id.say(&ctx, "Failed to read image.").await;
+                    error!(filename = %attachment.filename, "Failed to create image reader");
+                    let _ = msg.channel_id.say(&ctx, "❌ Failed to read the image. Please try a different image or format.").await;
                     return Ok(());
                 }
             } else {
-                error!("Failed to download image bytes");
-                let _ = msg.channel_id.say(&ctx, "Failed to download image.").await;
+                error!(filename = %attachment.filename, "Failed to download image bytes");
+                let _ = msg.channel_id.say(&ctx, "❌ Failed to download the image. Please try re-uploading your image.").await;
                 return Ok(());
             }
         } else {
-            error!("Failed to fetch image from URL");
-            let _ = msg.channel_id.say(&ctx, "Failed to fetch image from URL.").await;
+            error!(filename = %attachment.filename, url = %attachment.url, "Failed to fetch image from URL");
+            let _ = msg.channel_id.say(&ctx, "❌ Failed to fetch the image from Discord. Please try again later.").await;
             return Ok(());
         }
     } else {
-        warn!("No image attachment found");
-        let _ = msg.channel_id.say(&ctx, "Please attach an image to process.").await;
+        warn!(user = %msg.author.name, "No image attachment found");
+        let _ = msg.channel_id.say(&ctx, "❌ No image attachment found. Please attach an image to your message and try again.").await;
         return Ok(());
     }
 }
 
 #[tokio::main]
-async fn main() {
-    tracing_subscriber::fmt::init();
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Set up logging: INFO to console, ERROR to file
+    let file = File::create("catppuccin_bot.log")?;
+    let (file_writer, _guard) = non_blocking(file);
+    tracing_subscriber::registry()
+        .with(fmt::layer().with_writer(std::io::stdout).with_filter(EnvFilter::new("info")))
+        .with(fmt::layer().with_writer(file_writer).with_filter(EnvFilter::new("error")))
+        .init();
+    tracing::info!("Starting Catppuccinifier Bot...");
     dotenv().ok();
-    info!("Starting Catppuccinifier Bot...");
     let token = std::env::var("DISCORD_BOT_TOKEN")
         .expect("Expected a Discord bot token in the environment variable DISCORD_BOT_TOKEN. Make sure you have a .env file with DISCORD_BOT_TOKEN=YOUR_TOKEN_HERE");
     let intents = GatewayIntents::GUILD_MESSAGES
@@ -163,4 +185,5 @@ async fn main() {
     if let Err(why) = client.start().await {
         info!(?why, "Client error");
     }
+    Ok(())
 }
