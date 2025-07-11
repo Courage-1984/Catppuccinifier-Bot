@@ -12,213 +12,17 @@ use dotenv::dotenv;
 use std::time::Instant;
 use rayon::prelude::*;
 use palette::{Lab, Srgb, IntoColor, color_difference::EuclideanDistance};
-use tokio::sync::{mpsc, oneshot, Semaphore};
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use once_cell::sync::Lazy;
+use tokio::sync::Semaphore;
+
+static PROCESSING_SEMAPHORE: Lazy<Semaphore> = Lazy::new(|| Semaphore::new(1));
 
 // Import the correct items from the 'catppuccin' crate
 use catppuccin::{PALETTE, FlavorName}; // Changed Flavor to FlavorName
 
-// Task types for the queue
-#[derive(Debug)]
-enum TaskType {
-    ImageProcessing {
-        flavor: FlavorName,
-        algorithm: String,
-        process_all_flavors: bool,
-        show_comparison: bool,
-        show_stats: bool,
-        batch_mode: bool,
-        selected_quality: Option<String>,
-        selected_format: Option<ImageFormat>,
-        attachment_url: String,
-        content_type: Option<String>,
-    },
-    HexConversion {
-        hex_color: String,
-        flavor: FlavorName,
-    },
-    PalettePreview {
-        flavor: Option<FlavorName>,
-        show_all: bool,
-    },
-    Help,
-}
-
-// Task structure for the queue
-#[derive(Debug)]
-struct QueuedTask {
-    id: u64,
-    task_type: TaskType,
-    user_id: u64,
-    channel_id: u64,
-    message_id: u64,
-    response_tx: oneshot::Sender<()>,
-}
-
-// Queue manager structure
-struct TaskQueue {
-    tx: mpsc::Sender<QueuedTask>,
-    next_id: Arc<Mutex<u64>>,
-    queue_length: Arc<Mutex<usize>>,
-}
-
-impl TaskQueue {
-    fn new() -> Self {
-        let (tx, mut rx) = mpsc::channel::<QueuedTask>(100);
-        let next_id = Arc::new(Mutex::new(1));
-        let queue_length = Arc::new(Mutex::new(0));
-        
-        // Spawn the queue processor
-        let next_id_clone = next_id.clone();
-        let queue_length_clone = queue_length.clone();
-        tokio::spawn(async move {
-            let mut queue: Vec<QueuedTask> = Vec::new();
-            let mut processing = false;
-            
-            loop {
-                tokio::select! {
-                    // Handle new task
-                    task = rx.recv() => {
-                        if let Some(task) = task {
-                            let task_id = {
-                                let mut id_guard = next_id_clone.lock().await;
-                                let id = *id_guard;
-                                *id_guard += 1;
-                                id
-                            };
-                            
-                            let mut task = task;
-                            task.id = task_id;
-                            queue.push(task);
-                            
-                            // Update queue length
-                            {
-                                let mut len_guard = queue_length_clone.lock().await;
-                                *len_guard = queue.len();
-                            }
-                            
-                            println!("Task {} queued. Queue length: {}", task_id, queue.len());
-                        } else {
-                            // Channel closed, break the loop
-                            break;
-                        }
-                    }
-                    
-                    // Process next task if not currently processing
-                    _ = async {
-                        if !processing && !queue.is_empty() {
-                            processing = true;
-                        }
-                    }, if !processing && !queue.is_empty() => {
-                        if queue.is_empty() {
-                            processing = false;
-                        } else {
-                            let task = queue.remove(0);
-                            processing = true;
-                            
-                            // Update queue length
-                            {
-                                let mut len_guard = queue_length_clone.lock().await;
-                                *len_guard = queue.len();
-                            }
-                            
-                            // Process the task in a separate task to avoid blocking
-                            tokio::spawn(async move {
-                                process_task(task).await;
-                            });
-                        }
-                    }
-                    
-                    // Mark processing as complete after a short delay
-                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)), if processing => {
-                        processing = false;
-                    }
-                }
-            }
-        });
-        
-        Self { tx, next_id, queue_length }
-    }
-    
-    async fn enqueue(&self, task: TaskType, user_id: u64, channel_id: u64, message_id: u64) -> Result<u64, mpsc::error::SendError<QueuedTask>> {
-        let (response_tx, _response_rx) = oneshot::channel();
-        let task_id = {
-            let mut id_guard = self.next_id.lock().await;
-            let id = *id_guard;
-            *id_guard += 1;
-            id
-        };
-        
-        let queued_task = QueuedTask {
-            id: task_id,
-            task_type: task,
-            user_id,
-            channel_id,
-            message_id,
-            response_tx,
-        };
-        
-        self.tx.send(queued_task).await?;
-        Ok(task_id)
-    }
-    
-    async fn get_queue_length(&self) -> usize {
-        let len_guard = self.queue_length.lock().await;
-        *len_guard
-    }
-}
-
-
-
-// Global task queue and semaphore for controlling concurrent processing
-static TASK_QUEUE: once_cell::sync::Lazy<Arc<TaskQueue>> = once_cell::sync::Lazy::new(|| {
-    Arc::new(TaskQueue::new())
-});
-
-// Semaphore to limit concurrent processing
-static PROCESSING_SEMAPHORE: once_cell::sync::Lazy<Arc<Semaphore>> = once_cell::sync::Lazy::new(|| {
-    Arc::new(Semaphore::new(1)) // Only process one task at a time
-});
-
-// Process a single task
-async fn process_task(task: QueuedTask) {
-    println!("Processing task {} for user {}", task.id, task.user_id);
-    
-    match task.task_type {
-        TaskType::ImageProcessing { flavor, algorithm: _, process_all_flavors: _, show_comparison: _, show_stats: _, batch_mode: _, selected_quality: _, selected_format: _, attachment_url: _, content_type: _ } => {
-            println!("Processing image task {} with flavor {:?}", task.id, flavor);
-            
-            // Simulate processing time
-            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-            println!("Completed image task {}", task.id);
-        }
-        TaskType::HexConversion { hex_color, flavor } => {
-            println!("Processing hex conversion task {} for color {} with flavor {:?}", task.id, hex_color, flavor);
-            
-            // Simulate processing time
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            println!("Completed hex conversion task {}", task.id);
-        }
-        TaskType::PalettePreview { flavor, show_all } => {
-            println!("Processing palette preview task {} for flavor {:?}, show_all: {}", task.id, flavor, show_all);
-            
-            // Simulate processing time
-            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-            println!("Completed palette preview task {}", task.id);
-        }
-        TaskType::Help => {
-            println!("Processing help task {}", task.id);
-            
-            // Simulate processing time
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            println!("Completed help task {}", task.id);
-        }
-    }
-    
-    // Send completion signal
-    let _ = task.response_tx.send(());
-}
+// Remove unused task queue system
+// Removed: TaskType, QueuedTask, TaskQueue, TASK_QUEUE, process_task, send_queue_status
+// Remove unused imports
 
 // Helper function to send help message
 async fn send_help_message(ctx: &Context, channel_id: serenity::model::id::ChannelId) -> Result<(), serenity::Error> {
@@ -315,27 +119,6 @@ async fn send_help_message(ctx: &Context, channel_id: serenity::model::id::Chann
         }
     }
     
-    Ok(())
-}
-
-// Helper function to send queue status message
-async fn send_queue_status(
-    ctx: &Context,
-    channel_id: serenity::model::id::ChannelId,
-    task_id: u64,
-    position: usize,
-) -> Result<(), serenity::Error> {
-    let embed = serenity::builder::CreateEmbed::default()
-        .title("⏳ Catppuccinifier Bot - Queued")
-        .description(format!(
-            "Your request has been queued!\n\n**Task ID:** {}\n**Position in queue:** {}\n\nI'll process your request as soon as possible. You'll be notified when it's your turn!",
-            task_id, position
-        ))
-        .color(0xf5c2e7) // Catppuccin pink color
-        .footer(serenity::builder::CreateEmbedFooter::new("Processing queue..."));
-
-    let builder = serenity::builder::CreateMessage::new().embed(embed);
-    channel_id.send_message(&ctx.http, builder).await?;
     Ok(())
 }
 
@@ -908,6 +691,17 @@ impl EventHandler for Handler {
             let mut selected_quality = None;
             let mut selected_format = None;
 
+            // Check for fast flag anywhere in the message
+            if msg.content.split_whitespace().any(|arg| arg == "-f") {
+                selected_quality = Some("fast".to_string());
+                selected_algorithm = "nearest-neighbor";
+                println!("Fast flag detected: using nearest-neighbor algorithm");
+                // Send custom fast mode message
+                if let Err(why) = msg.channel_id.say(&ctx.http, "⚡ Fast mode enabled! Your image will be processed using the fastest settings (nearest-neighbor algorithm).").await {
+                    eprintln!("Error sending fast mode message: {:?}", why);
+                }
+            }
+
             if parts.len() > 1 {
                 if parts[1] == "all" {
                     process_all_flavors = true;
@@ -1420,10 +1214,10 @@ impl EventHandler for Handler {
                 let mut output_buffer = Cursor::new(Vec::new());
                         let output_format = selected_format.unwrap_or_else(|| {
                             match attachment.content_type.as_deref() {
-                                Some("image/png") => ImageFormat::Png,
-                                Some("image/jpeg") => ImageFormat::Jpeg,
-                                Some("image/gif") => ImageFormat::Gif,
-                                Some("image/webp") => ImageFormat::WebP,
+                    Some("image/png") => ImageFormat::Png,
+                    Some("image/jpeg") => ImageFormat::Jpeg,
+                    Some("image/gif") => ImageFormat::Gif,
+                    Some("image/webp") => ImageFormat::WebP,
                                 _ => ImageFormat::Png,
                             }
                         });
