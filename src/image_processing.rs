@@ -4,8 +4,22 @@ use rayon::prelude::*;
 use image::{RgbaImage, Rgba};
 use catppuccin::{PALETTE, FlavorName};
 use palette::{Lab, Srgb, IntoColor, color_difference::EuclideanDistance};
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use gif::{Decoder as GifDecoder, Encoder as GifEncoder, Frame as GifFrame, Repeat};
+use std::io::Cursor;
 
-pub fn generate_catppuccin_lut(_flavor: FlavorName, _algorithm: &str) -> Vec<u8> {
+static LUT_CACHE: Lazy<Mutex<HashMap<(String, String), Arc<Vec<u8>>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+pub fn generate_catppuccin_lut(_flavor: FlavorName, _algorithm: &str) -> Arc<Vec<u8>> {
+    let key = (_flavor.to_string(), _algorithm.to_string());
+    {
+        let cache = LUT_CACHE.lock().unwrap();
+        if let Some(lut) = cache.get(&key) {
+            return lut.clone();
+        }
+    }
     let colors_struct = match _flavor {
         FlavorName::Latte => &PALETTE.latte.colors,
         FlavorName::Frappe => &PALETTE.frappe.colors,
@@ -95,7 +109,10 @@ pub fn generate_catppuccin_lut(_flavor: FlavorName, _algorithm: &str) -> Vec<u8>
             }
         }
     }
-    lut
+    let lut_arc = Arc::new(lut);
+    let mut cache = LUT_CACHE.lock().unwrap();
+    cache.insert(key, lut_arc.clone());
+    lut_arc
 }
 
 pub fn sample_lut(lut: &[u8], r: f32, g: f32, b: f32) -> [f32; 3] {
@@ -199,6 +216,110 @@ pub fn analyze_image_colors(img: &RgbaImage) -> (Vec<(u8, u8, u8, u32)>, FlavorN
 }
 
 pub fn process_image_with_palette(img: &image::DynamicImage, _flavor: catppuccin::FlavorName, _algorithm: &str) -> image::DynamicImage {
-    // TODO: Implement actual image processing logic
-    img.clone()
+    let lut = generate_catppuccin_lut(_flavor, _algorithm);
+    let mut img_rgba = img.to_rgba8();
+    apply_lut_to_image(&mut img_rgba, &lut);
+    image::DynamicImage::ImageRgba8(img_rgba)
+}
+
+pub fn process_gif_with_palette(gif_bytes: &[u8], flavor: catppuccin::FlavorName, algorithm: &str) -> Result<Vec<u8>, String> {
+    let mut decoder = GifDecoder::new(Cursor::new(gif_bytes)).map_err(|e| format!("Failed to create GIF decoder: {e}"))?;
+    let global_palette = decoder.global_palette().map(|p| p.to_vec());
+    let mut processed_frames = Vec::new();
+    while let Some(frame) = decoder.read_next_frame().map_err(|e| format!("Failed to read GIF frame: {e}"))? {
+        let width = frame.width as u16;
+        let height = frame.height as u16;
+        let palette = frame.palette.as_ref().map(|v| v.as_slice()).or(global_palette.as_ref().map(|v| v.as_slice()));
+        println!("GIF frame: width={}, height={}, buffer_len={}, palette_len={}",
+            width, height, frame.buffer.len(), palette.map(|p| p.len()).unwrap_or(0));
+        // Convert indexed frame to RGBA
+        let mut rgba_buf = Vec::with_capacity((width as usize) * (height as usize) * 4);
+        if let Some(pal) = palette {
+            for &idx in frame.buffer.iter() {
+                let i = idx as usize * 3;
+                if i + 2 < pal.len() {
+                    rgba_buf.push(pal[i]);     // R
+                    rgba_buf.push(pal[i + 1]); // G
+                    rgba_buf.push(pal[i + 2]); // B
+                    rgba_buf.push(255);        // A
+                } else {
+                    rgba_buf.extend_from_slice(&[0, 0, 0, 255]);
+                }
+            }
+        } else {
+            // No palette, treat as grayscale
+            for &v in frame.buffer.iter() {
+                rgba_buf.extend_from_slice(&[v, v, v, 255]);
+            }
+        }
+        let mut rgba_img = image::RgbaImage::from_raw(width as u32, height as u32, rgba_buf)
+            .ok_or("Failed to convert GIF frame to RGBA image")?;
+        let lut = generate_catppuccin_lut(flavor, algorithm);
+        apply_lut_to_image(&mut rgba_img, &lut);
+        let mut processed_frame = GifFrame::from_rgba_speed(width, height, &mut rgba_img.into_raw(), 10);
+        processed_frame.delay = frame.delay;
+        processed_frames.push(processed_frame);
+    }
+    // Encode new GIF
+    let mut output = Vec::new();
+    if let Some(first_frame) = processed_frames.first() {
+        let mut encoder = GifEncoder::new(&mut output, first_frame.width, first_frame.height, &[])
+            .map_err(|e| format!("Failed to create GIF encoder: {e}"))?;
+        encoder.set_repeat(Repeat::Infinite).map_err(|e| format!("Failed to set GIF repeat: {e}"))?;
+        for frame in processed_frames {
+            encoder.write_frame(&frame).map_err(|e| format!("Failed to write GIF frame: {e}"))?;
+        }
+    }
+    Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use catppuccin::FlavorName;
+
+    #[test]
+    fn test_generate_catppuccin_lut_length() {
+        let lut = generate_catppuccin_lut(FlavorName::Latte, "shepards-method");
+        assert_eq!(lut.len(), 256 * 256 * 256 * 3);
+    }
+
+    #[test]
+    fn test_generate_catppuccin_lut_different_flavors() {
+        let lut1 = generate_catppuccin_lut(FlavorName::Latte, "shepards-method");
+        let lut2 = generate_catppuccin_lut(FlavorName::Mocha, "shepards-method");
+        assert_ne!(lut1[..100], lut2[..100]); // The LUTs should differ for different flavors
+    }
+
+    #[test]
+    fn test_create_comparison_image() {
+        use image::{RgbaImage, Rgba};
+        let mut orig = RgbaImage::new(10, 10);
+        let mut proc = RgbaImage::new(10, 10);
+        for x in 0..10 {
+            for y in 0..10 {
+                orig.put_pixel(x, y, Rgba([255, 0, 0, 255]));
+                proc.put_pixel(x, y, Rgba([0, 255, 0, 255]));
+            }
+        }
+        let cmp = create_comparison_image(&orig, &proc);
+        assert_eq!(cmp.width(), 10 * 2 + 20);
+        assert_eq!(cmp.height(), 10);
+        // Check left and right halves
+        assert_eq!(cmp.get_pixel(0, 0), &Rgba([255, 0, 0, 255]));
+        assert_eq!(cmp.get_pixel(10 + 20, 0), &Rgba([0, 255, 0, 255]));
+    }
+
+    #[test]
+    fn test_process_gif_with_palette_minimal() {
+        // Minimal 2-frame GIF (1x1 px, red and green)
+        let gif_bytes: &[u8] = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\xFF\x00\x00\x00\xFF\x00!\xF9\x04\x00\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00!\xF9\x04\x00\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;";
+        let result = process_gif_with_palette(gif_bytes, FlavorName::Latte, "shepards-method");
+        if let Err(e) = &result {
+            println!("GIF processing error: {}", e);
+        }
+        assert!(result.is_ok());
+        let out = result.unwrap();
+        assert!(!out.is_empty());
+    }
 } 

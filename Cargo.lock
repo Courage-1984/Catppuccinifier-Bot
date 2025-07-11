@@ -284,11 +284,14 @@ version = "0.1.0"
 dependencies = [
  "catppuccin",
  "chrono",
+ "dashmap",
  "dotenv",
+ "gif 0.12.0",
  "image 0.25.6",
  "lutgen",
  "once_cell",
  "palette",
+ "rand 0.8.5",
  "rayon",
  "regex",
  "reqwest 0.12.22",
@@ -771,6 +774,16 @@ dependencies = [
 
 [[package]]
 name = "gif"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80792593675e051cf94a4b111980da2ba60d4a83e43e0048c5693baab3977045"
+dependencies = [
+ "color_quant",
+ "weezl",
+]
+
+[[package]]
+name = "gif"
 version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ae047235e33e2829703574b54fdec96bfbad892062d97fed2f76022287de61b"
@@ -1185,7 +1198,7 @@ dependencies = [
  "byteorder",
  "color_quant",
  "exr",
- "gif",
+ "gif 0.13.3",
  "jpeg-decoder",
  "num-traits",
  "png",
@@ -1202,7 +1215,7 @@ dependencies = [
  "bytemuck",
  "byteorder-lite",
  "color_quant",
- "gif",
+ "gif 0.13.3",
  "image-webp",
  "num-traits",
  "png",
@@ -2350,15 +2363,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
-name = "signal-hook-registry"
-version = "1.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9203b8055f63a2a00e2f593bb0510367fe707d7ff1e5c872de2f537b339e5410"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "simd-adler32"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2662,9 +2666,7 @@ dependencies = [
  "io-uring",
  "libc",
  "mio",
- "parking_lot",
  "pin-project-lite",
- "signal-hook-registry",
  "slab",
  "socket2",
  "tokio-macros",

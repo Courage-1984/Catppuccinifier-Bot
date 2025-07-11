@@ -9,6 +9,7 @@ use crate::image_processing;
 use image::ImageReader;
 use regex;
 use tracing::{info, warn, error, debug};
+use crate::utils::{MOCHA_MAUVE, MOCHA_GREEN, MOCHA_BLUE, MOCHA_RED};
 
 pub struct Handler;
 
@@ -85,12 +86,16 @@ pub async fn send_help_message(ctx: &Context, channel_id: serenity::model::id::C
 `!cat -h` or `!cat help` - Show this help message"#
     ];
     for (i, help_part) in help_parts.iter().enumerate() {
-        let part_number = if help_parts.len() > 1 { 
-            format!(" (Part {}/{})", i + 1, help_parts.len()) 
-        } else { 
-            String::new() 
+        let part_number = if help_parts.len() > 1 {
+            format!(" (Part {}/{})", i + 1, help_parts.len())
+        } else {
+            String::new()
         };
-        if let Err(why) = channel_id.say(&ctx.http, &format!("{}{}", help_part, part_number)).await {
+        let embed = serenity::builder::CreateEmbed::default()
+            .description(format!("{}{}", help_part, part_number))
+            .color(MOCHA_MAUVE);
+        let builder = serenity::builder::CreateMessage::new().embed(embed);
+        if let Err(why) = channel_id.send_message(&ctx.http, builder).await {
             error!(?why, "Error sending help message part {}", i + 1);
             break;
         }
@@ -143,7 +148,7 @@ impl EventHandler for Handler {
             let mut show_palette = false;
             let mut show_comparison = false;
             let mut show_stats = false;
-            let mut _batch_mode = false; // TODO: Implement batch processing
+            let mut batch_mode = false; // Now used for batch processing
             let mut selected_quality = None;
             let mut selected_format = None;
 
@@ -163,7 +168,7 @@ impl EventHandler for Handler {
                 } else if parts[1] == "stats" {
                     show_stats = true;
                 } else if parts[1] == "batch" {
-                    _batch_mode = true;
+                    batch_mode = true;
                 } else if let Some(flavor) = utils::parse_flavor(parts[1]) {
                     selected_flavor = flavor;
                     has_explicit_flavor_arg = true;
@@ -174,6 +179,11 @@ impl EventHandler for Handler {
                 } else if let Some(format) = utils::parse_format(parts[1]) {
                     selected_format = Some(format);
                 }
+            }
+
+            // Enable batch mode if multiple image attachments are present
+            if msg.attachments.len() > 1 {
+                batch_mode = true;
             }
 
             if parts.len() > 2 {
@@ -242,7 +252,7 @@ impl EventHandler for Handler {
                             let embed = serenity::builder::CreateEmbed::default()
                                 .title("Catppuccin Color Conversion")
                                 .description(format!("Original Color: `{}`", original_color_display))
-                                .color(embed_color)
+                                .color(MOCHA_MAUVE)
                                 .field(
                                     "Closest Catppuccin Color",
                                     format!("**{}** (`{}`) (Flavor: {})", color_name.to_uppercase(), converted_color_display, selected_flavor.to_string().to_uppercase()),
@@ -261,6 +271,68 @@ impl EventHandler for Handler {
             }
 
             // Image Processing Logic
+            if batch_mode && !msg.attachments.is_empty() {
+                // Batch processing: process all image attachments
+                let mut processed_attachments = Vec::new();
+                let mut failed_count = 0;
+                for attachment in msg.attachments.iter() {
+                    let content_type_is_image = attachment.content_type.as_deref().map_or(false, |s| s.starts_with("image/"));
+                    if !content_type_is_image {
+                        continue;
+                    }
+                    let reqwest_client = reqwest::Client::new();
+                    let image_bytes = match reqwest_client.get(&attachment.url).send().await {
+                        Ok(response) => match response.bytes().await {
+                            Ok(bytes) => bytes,
+                            Err(_) => {
+                                failed_count += 1;
+                                continue;
+                            }
+                        },
+                        Err(_) => {
+                            failed_count += 1;
+                            continue;
+                        }
+                    };
+                    let img = match ImageReader::new(std::io::Cursor::new(image_bytes)).with_guessed_format().expect("Failed to guess image format").decode() {
+                        Ok(img) => img,
+                        Err(_) => {
+                            failed_count += 1;
+                            continue;
+                        }
+                    };
+                    let mut rgba_img = img.to_rgba8();
+                    let lut = image_processing::generate_catppuccin_lut(selected_flavor, selected_algorithm);
+                    image_processing::apply_lut_to_image(&mut rgba_img, &lut);
+                    let mut output_buffer = std::io::Cursor::new(Vec::new());
+                    let output_format = selected_format.unwrap_or(image::ImageFormat::Png);
+                    let dynamic_img = image::DynamicImage::ImageRgba8(rgba_img);
+                    if let Err(_) = dynamic_img.write_to(&mut output_buffer, output_format) {
+                        failed_count += 1;
+                        continue;
+                    }
+                    let filename = format!("catppuccinified_{}_{}.", selected_flavor.to_string().to_lowercase(), attachment.filename);
+                    let filename = if let Some(ext) = output_format.extensions_str().first() {
+                        format!("{}{}", filename, ext)
+                    } else {
+                        format!("{}png", filename)
+                    };
+                    let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), filename);
+                    processed_attachments.push(attachment_data);
+                }
+                if !processed_attachments.is_empty() {
+                    let message_content = if failed_count > 0 {
+                        format!("Here are your Catppuccinified images! ({} failed)", failed_count)
+                    } else {
+                        "Here are your Catppuccinified images!".to_string()
+                    };
+                    let message_builder = serenity::builder::CreateMessage::new().content(message_content);
+                    let _ = msg.channel_id.send_files(&ctx.http, processed_attachments, message_builder).await;
+                } else {
+                    let _ = msg.channel_id.say(&ctx.http, "Failed to process any images. Please ensure your attachments are valid images.").await;
+                }
+                return;
+            }
             if let Some(attachment) = msg.attachments.first() {
                 info!(filename = %attachment.filename, url = %attachment.url, "Image received");
                 // Only process if it's an image

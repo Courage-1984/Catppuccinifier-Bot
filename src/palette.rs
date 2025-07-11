@@ -88,4 +88,37 @@ pub fn generate_all_palettes_preview() -> RgbaImage {
         }
     }
     img
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use catppuccin::FlavorName;
+
+    #[test]
+    fn test_generate_palette_preview_dimensions() {
+        let img = generate_palette_preview(FlavorName::Latte);
+        // 5x5 grid, swatch_size 60, margin 10: total = 5*60 + 6*10 = 360
+        assert_eq!(img.width(), 360);
+        assert_eq!(img.height(), 360);
+    }
+
+    #[test]
+    fn test_generate_palette_preview_pixel_color() {
+        let img = generate_palette_preview(FlavorName::Latte);
+        // Top-left swatch should be rosewater
+        let px = img.get_pixel(10 + 30, 10 + 30); // center of first swatch
+        let colors_struct = &catppuccin::PALETTE.latte.colors;
+        let rosewater = [colors_struct.rosewater.rgb.r, colors_struct.rosewater.rgb.g, colors_struct.rosewater.rgb.b, 255];
+        assert_eq!(px.0, rosewater);
+    }
+
+    #[test]
+    fn test_generate_all_palettes_preview_dimensions() {
+        let img = generate_all_palettes_preview();
+        // 4 flavors, each flavor_width = 4*40 + 5*5 = 185, total_width = 4*185 + 5*5 = 765
+        // flavor_height = 16*40 + 17*5 + 30 = 755
+        assert_eq!(img.width(), 765);
+        assert_eq!(img.height(), 755);
+    }
 } 
