@@ -250,6 +250,7 @@ dependencies = [
  "dotenv",
  "image 0.25.6",
  "lutgen",
+ "once_cell",
  "palette",
  "rayon",
  "regex",

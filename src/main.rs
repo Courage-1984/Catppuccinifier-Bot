@@ -12,9 +12,332 @@ use dotenv::dotenv;
 use std::time::Instant;
 use rayon::prelude::*;
 use palette::{Lab, Srgb, IntoColor, color_difference::EuclideanDistance};
+use tokio::sync::{mpsc, oneshot, Semaphore};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 // Import the correct items from the 'catppuccin' crate
 use catppuccin::{PALETTE, FlavorName}; // Changed Flavor to FlavorName
+
+// Task types for the queue
+#[derive(Debug)]
+enum TaskType {
+    ImageProcessing {
+        flavor: FlavorName,
+        algorithm: String,
+        process_all_flavors: bool,
+        show_comparison: bool,
+        show_stats: bool,
+        batch_mode: bool,
+        selected_quality: Option<String>,
+        selected_format: Option<ImageFormat>,
+        attachment_url: String,
+        content_type: Option<String>,
+    },
+    HexConversion {
+        hex_color: String,
+        flavor: FlavorName,
+    },
+    PalettePreview {
+        flavor: Option<FlavorName>,
+        show_all: bool,
+    },
+    Help,
+}
+
+// Task structure for the queue
+#[derive(Debug)]
+struct QueuedTask {
+    id: u64,
+    task_type: TaskType,
+    user_id: u64,
+    channel_id: u64,
+    message_id: u64,
+    response_tx: oneshot::Sender<()>,
+}
+
+// Queue manager structure
+struct TaskQueue {
+    tx: mpsc::Sender<QueuedTask>,
+    next_id: Arc<Mutex<u64>>,
+    queue_length: Arc<Mutex<usize>>,
+}
+
+impl TaskQueue {
+    fn new() -> Self {
+        let (tx, mut rx) = mpsc::channel::<QueuedTask>(100);
+        let next_id = Arc::new(Mutex::new(1));
+        let queue_length = Arc::new(Mutex::new(0));
+        
+        // Spawn the queue processor
+        let next_id_clone = next_id.clone();
+        let queue_length_clone = queue_length.clone();
+        tokio::spawn(async move {
+            let mut queue: Vec<QueuedTask> = Vec::new();
+            let mut processing = false;
+            
+            loop {
+                tokio::select! {
+                    // Handle new task
+                    task = rx.recv() => {
+                        if let Some(task) = task {
+                            let task_id = {
+                                let mut id_guard = next_id_clone.lock().await;
+                                let id = *id_guard;
+                                *id_guard += 1;
+                                id
+                            };
+                            
+                            let mut task = task;
+                            task.id = task_id;
+                            queue.push(task);
+                            
+                            // Update queue length
+                            {
+                                let mut len_guard = queue_length_clone.lock().await;
+                                *len_guard = queue.len();
+                            }
+                            
+                            println!("Task {} queued. Queue length: {}", task_id, queue.len());
+                        } else {
+                            // Channel closed, break the loop
+                            break;
+                        }
+                    }
+                    
+                    // Process next task if not currently processing
+                    _ = async {
+                        if !processing && !queue.is_empty() {
+                            processing = true;
+                        }
+                    }, if !processing && !queue.is_empty() => {
+                        if queue.is_empty() {
+                            processing = false;
+                        } else {
+                            let task = queue.remove(0);
+                            processing = true;
+                            
+                            // Update queue length
+                            {
+                                let mut len_guard = queue_length_clone.lock().await;
+                                *len_guard = queue.len();
+                            }
+                            
+                            // Process the task in a separate task to avoid blocking
+                            tokio::spawn(async move {
+                                process_task(task).await;
+                            });
+                        }
+                    }
+                    
+                    // Mark processing as complete after a short delay
+                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)), if processing => {
+                        processing = false;
+                    }
+                }
+            }
+        });
+        
+        Self { tx, next_id, queue_length }
+    }
+    
+    async fn enqueue(&self, task: TaskType, user_id: u64, channel_id: u64, message_id: u64) -> Result<u64, mpsc::error::SendError<QueuedTask>> {
+        let (response_tx, _response_rx) = oneshot::channel();
+        let task_id = {
+            let mut id_guard = self.next_id.lock().await;
+            let id = *id_guard;
+            *id_guard += 1;
+            id
+        };
+        
+        let queued_task = QueuedTask {
+            id: task_id,
+            task_type: task,
+            user_id,
+            channel_id,
+            message_id,
+            response_tx,
+        };
+        
+        self.tx.send(queued_task).await?;
+        Ok(task_id)
+    }
+    
+    async fn get_queue_length(&self) -> usize {
+        let len_guard = self.queue_length.lock().await;
+        *len_guard
+    }
+}
+
+
+
+// Global task queue and semaphore for controlling concurrent processing
+static TASK_QUEUE: once_cell::sync::Lazy<Arc<TaskQueue>> = once_cell::sync::Lazy::new(|| {
+    Arc::new(TaskQueue::new())
+});
+
+// Semaphore to limit concurrent processing
+static PROCESSING_SEMAPHORE: once_cell::sync::Lazy<Arc<Semaphore>> = once_cell::sync::Lazy::new(|| {
+    Arc::new(Semaphore::new(1)) // Only process one task at a time
+});
+
+// Process a single task
+async fn process_task(task: QueuedTask) {
+    println!("Processing task {} for user {}", task.id, task.user_id);
+    
+    match task.task_type {
+        TaskType::ImageProcessing { flavor, algorithm: _, process_all_flavors: _, show_comparison: _, show_stats: _, batch_mode: _, selected_quality: _, selected_format: _, attachment_url: _, content_type: _ } => {
+            println!("Processing image task {} with flavor {:?}", task.id, flavor);
+            
+            // Simulate processing time
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            println!("Completed image task {}", task.id);
+        }
+        TaskType::HexConversion { hex_color, flavor } => {
+            println!("Processing hex conversion task {} for color {} with flavor {:?}", task.id, hex_color, flavor);
+            
+            // Simulate processing time
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            println!("Completed hex conversion task {}", task.id);
+        }
+        TaskType::PalettePreview { flavor, show_all } => {
+            println!("Processing palette preview task {} for flavor {:?}, show_all: {}", task.id, flavor, show_all);
+            
+            // Simulate processing time
+            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+            println!("Completed palette preview task {}", task.id);
+        }
+        TaskType::Help => {
+            println!("Processing help task {}", task.id);
+            
+            // Simulate processing time
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            println!("Completed help task {}", task.id);
+        }
+    }
+    
+    // Send completion signal
+    let _ = task.response_tx.send(());
+}
+
+// Helper function to send help message
+async fn send_help_message(ctx: &Context, channel_id: serenity::model::id::ChannelId) -> Result<(), serenity::Error> {
+    let help_parts = vec![
+        r#"**Catppuccinifier Bot Commands**
+
+**Basic Usage:**
+`!cat [image]` - Process image with default Latte flavor
+`!cat [flavor] [image]` - Process image with specific flavor
+`!cat [flavor] [algorithm] [image]` - Process image with flavor and algorithm
+
+**Hex Color Conversion:**
+`!cat #FF0000` - Convert hex color to Catppuccin
+`!cat [flavor] #FF0000` - Convert hex color with specific flavor
+
+**Color Palette Preview:**
+`!cat palette [flavor]` - Show all colors in a specific flavor
+`!cat palette all` - Show all flavors' color palettes
+
+**Before/After Comparison:**
+`!cat compare [image]` - Send original + processed image side by side"#,
+
+        r#"**Batch Processing:**
+`!cat batch [multiple images]` - Process multiple images at once
+
+**Quality Settings:**
+`!cat [flavor] [quality] [image]` - quality: fast, normal, high
+
+**Color Statistics:**
+`!cat stats [image]` - Show dominant colors and suggest best flavor
+
+**Export Options:**
+`!cat [flavor] [format] [image]` - format: png, jpg, webp
+
+**All Flavors Processing:**
+`!cat all [image]` - Process image with all 4 flavors (Latte, Frappe, Macchiato, Mocha)"#,
+
+        r#"**Available Flavors:**
+• `latte` - Light, warm theme
+• `frappe` - Medium, balanced theme  
+• `macchiato` - Dark, rich theme
+• `mocha` - Darkest, deep theme
+
+**Available Algorithms:**
+• `shepards` - Best quality (default)
+• `gaussian` - Smooth gradients
+• `linear` - Fast processing
+• `sampling` - High quality, slower
+• `nearest` - Fastest, basic
+• `hald` - Hald CLUT method
+• `euclide` - Euclidean distance
+• `mean` - Mean-based mapping
+• `std` - Standard deviation method"#,
+
+        r#"**Quality Levels:**
+• `fast` - Nearest neighbor (fastest)
+• `normal` - Shepard's method (balanced)
+• `high` - Gaussian sampling (best quality)
+
+**Export Formats:**
+• `png` - Lossless, supports transparency
+• `jpg` - Compressed, smaller files
+• `webp` - Modern, good compression
+• `gif` - Animated images"#,
+
+        r#"**Examples:**
+`!cat mocha shepards [image]` - Mocha flavor with Shepard's method
+`!cat frappe gaussian [image]` - Frappe flavor with Gaussian algorithm
+`!cat all [image]` - Process with all flavors at once
+`!cat palette latte` - Show Latte color palette
+`!cat compare [image]` - Show before/after comparison
+`!cat mocha high [image]` - High quality Mocha processing
+`!cat latte png [image]` - Export as PNG format
+
+**Help:**
+`!cat -h` or `!cat help` - Show this help message"#
+    ];
+
+    for (i, help_part) in help_parts.iter().enumerate() {
+        let part_number = if help_parts.len() > 1 { 
+            format!(" (Part {}/{})", i + 1, help_parts.len()) 
+        } else { 
+            String::new() 
+        };
+        
+        if let Err(why) = channel_id.say(&ctx.http, &format!("{}{}", help_part, part_number)).await {
+            eprintln!("Error sending help message part {}: {:?}", i + 1, why);
+            break;
+        }
+        
+        // Small delay between messages to avoid rate limiting
+        if i < help_parts.len() - 1 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
+    }
+    
+    Ok(())
+}
+
+// Helper function to send queue status message
+async fn send_queue_status(
+    ctx: &Context,
+    channel_id: serenity::model::id::ChannelId,
+    task_id: u64,
+    position: usize,
+) -> Result<(), serenity::Error> {
+    let embed = serenity::builder::CreateEmbed::default()
+        .title("⏳ Catppuccinifier Bot - Queued")
+        .description(format!(
+            "Your request has been queued!\n\n**Task ID:** {}\n**Position in queue:** {}\n\nI'll process your request as soon as possible. You'll be notified when it's your turn!",
+            task_id, position
+        ))
+        .color(0xf5c2e7) // Catppuccin pink color
+        .footer(serenity::builder::CreateEmbedFooter::new("Processing queue..."));
+
+    let builder = serenity::builder::CreateMessage::new().embed(embed);
+    channel_id.send_message(&ctx.http, builder).await?;
+    Ok(())
+}
 
 struct Handler;
 
@@ -350,8 +673,8 @@ fn generate_catppuccin_lut(flavor: FlavorName, algorithm: &str) -> Vec<u8> {
                     
                     for (i, cat_lab) in catppuccin_labs.iter().enumerate() {
                         let distance = input_lab.distance_squared(*cat_lab);
-                        if distance < min_distance {
-                            min_distance = distance;
+        if distance < min_distance {
+            min_distance = distance;
                             closest_color = catppuccin_colors[i];
                         }
                     }
@@ -566,97 +889,9 @@ impl EventHandler for Handler {
 
             // Handle help command
             if parts.len() > 1 && (parts[1] == "-h" || parts[1] == "--help" || parts[1] == "help") {
-                let help_parts = vec![
-                    r#"**Catppuccinifier Bot Commands**
-
-**Basic Usage:**
-`!cat [image]` - Process image with default Latte flavor
-`!cat [flavor] [image]` - Process image with specific flavor
-`!cat [flavor] [algorithm] [image]` - Process image with flavor and algorithm
-
-**Hex Color Conversion:**
-`!cat #FF0000` - Convert hex color to Catppuccin
-`!cat [flavor] #FF0000` - Convert hex color with specific flavor
-
-**Color Palette Preview:**
-`!cat palette [flavor]` - Show all colors in a specific flavor
-`!cat palette all` - Show all flavors' color palettes
-
-**Before/After Comparison:**
-`!cat compare [image]` - Send original + processed image side by side"#,
-
-                    r#"**Batch Processing:**
-`!cat batch [multiple images]` - Process multiple images at once
-
-**Quality Settings:**
-`!cat [flavor] [quality] [image]` - quality: fast, normal, high
-
-**Color Statistics:**
-`!cat stats [image]` - Show dominant colors and suggest best flavor
-
-**Export Options:**
-`!cat [flavor] [format] [image]` - format: png, jpg, webp
-
-**All Flavors Processing:**
-`!cat all [image]` - Process image with all 4 flavors (Latte, Frappe, Macchiato, Mocha)"#,
-
-                    r#"**Available Flavors:**
-• `latte` - Light, warm theme
-• `frappe` - Medium, balanced theme  
-• `macchiato` - Dark, rich theme
-• `mocha` - Darkest, deep theme
-
-**Available Algorithms:**
-• `shepards` - Best quality (default)
-• `gaussian` - Smooth gradients
-• `linear` - Fast processing
-• `sampling` - High quality, slower
-• `nearest` - Fastest, basic
-• `hald` - Hald CLUT method
-• `euclide` - Euclidean distance
-• `mean` - Mean-based mapping
-• `std` - Standard deviation method"#,
-
-                    r#"**Quality Levels:**
-• `fast` - Nearest neighbor (fastest)
-• `normal` - Shepard's method (balanced)
-• `high` - Gaussian sampling (best quality)
-
-**Export Formats:**
-• `png` - Lossless, supports transparency
-• `jpg` - Compressed, smaller files
-• `webp` - Modern, good compression
-• `gif` - Animated images"#,
-
-                    r#"**Examples:**
-`!cat mocha shepards [image]` - Mocha flavor with Shepard's method
-`!cat frappe gaussian [image]` - Frappe flavor with Gaussian algorithm
-`!cat all [image]` - Process with all flavors at once
-`!cat palette latte` - Show Latte color palette
-`!cat compare [image]` - Show before/after comparison
-`!cat mocha high [image]` - High quality Mocha processing
-`!cat latte png [image]` - Export as PNG format
-
-**Help:**
-`!cat -h` or `!cat help` - Show this help message"#
-                ];
-
-                for (i, help_part) in help_parts.iter().enumerate() {
-                    let part_number = if help_parts.len() > 1 { 
-                        format!(" (Part {}/{})", i + 1, help_parts.len()) 
-                    } else { 
-                        String::new() 
-                    };
-                    
-                    if let Err(why) = msg.channel_id.say(&ctx.http, &format!("{}{}", help_part, part_number)).await {
-                        eprintln!("Error sending help message part {}: {:?}", i + 1, why);
-                        break;
-                    }
-                    
-                    // Small delay between messages to avoid rate limiting
-                    if i < help_parts.len() - 1 {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                    }
+                // Send help message immediately
+                if let Err(why) = send_help_message(&ctx, msg.channel_id).await {
+                    eprintln!("Error sending help message: {:?}", why);
                 }
                 return;
             }
@@ -697,7 +932,7 @@ impl EventHandler for Handler {
                     selected_algorithm = algorithm;
                     println!("Selected algorithm: {}", selected_algorithm);
                 } else if let Some(quality) = parse_quality(parts[1]) {
-                    selected_quality = Some(quality);
+                    selected_quality = Some(quality.to_string()); // Store as String
                     println!("Selected quality: {}", quality);
                 } else if let Some(format) = parse_format(parts[1]) {
                     selected_format = Some(format);
@@ -708,6 +943,17 @@ impl EventHandler for Handler {
             // Check for additional arguments
             if parts.len() > 2 {
                 if show_palette {
+                    // Acquire semaphore permit for processing
+                    let _permit = PROCESSING_SEMAPHORE.acquire().await.unwrap();
+                    
+                    // Send queue status if there are other tasks waiting
+                    let available_permits = PROCESSING_SEMAPHORE.available_permits();
+                    if available_permits == 0 {
+                        if let Err(why) = msg.channel_id.say(&ctx.http, "⏳ Your palette preview request is queued. I'll process it as soon as possible!").await {
+                            eprintln!("Error sending queue message: {:?}", why);
+                        }
+                    }
+                    
                     // Handle palette command: !cat palette [flavor]
                     if parts[2] == "all" {
                         // Show all palettes
@@ -773,7 +1019,7 @@ impl EventHandler for Handler {
                         selected_algorithm = algorithm;
                         println!("Selected algorithm: {}", selected_algorithm);
                     } else if let Some(quality) = parse_quality(parts[2]) {
-                        selected_quality = Some(quality);
+                        selected_quality = Some(quality.to_string()); // Store as String
                         selected_algorithm = quality; // Use quality as algorithm
                         println!("Selected quality: {}", quality);
                     } else if let Some(format) = parse_format(parts[2]) {
@@ -789,6 +1035,18 @@ impl EventHandler for Handler {
                 if parts.len() > input_color_arg_index {
                     let input_color = parts[input_color_arg_index];
                     println!("Hex color argument detected: {}", input_color);
+                    
+                    // Acquire semaphore permit for processing
+                    let _permit = PROCESSING_SEMAPHORE.acquire().await.unwrap();
+                    
+                    // Send queue status if there are other tasks waiting
+                    let available_permits = PROCESSING_SEMAPHORE.available_permits();
+                    if available_permits == 0 {
+                        if let Err(why) = msg.channel_id.say(&ctx.http, "⏳ Your hex color conversion is queued. I'll process it as soon as possible!").await {
+                            eprintln!("Error sending queue message: {:?}", why);
+                        }
+                    }
+                    
                     // Validate hex color format using regex.
                     let hex_regex = Regex::new(r"^#?([0-9a-fA-F]{3}){1,2}$").unwrap();
                     if !hex_regex.is_match(input_color) {
@@ -814,13 +1072,13 @@ impl EventHandler for Handler {
 
                             let embed = serenity::builder::CreateEmbed::default()
                                 .title("Catppuccin Color Conversion")
-                                .description(format!("Original Color: `{}`", original_color_display))
-                                .color(embed_color)
-                                .field(
-                                    "Closest Catppuccin Color",
-                                    format!("**{}** (`{}`) (Flavor: {})", color_name.to_uppercase(), converted_color_display, selected_flavor.to_string().to_uppercase()),
-                                    false,
-                                )
+                                        .description(format!("Original Color: `{}`", original_color_display))
+                                        .color(embed_color)
+                                        .field(
+                                            "Closest Catppuccin Color",
+                                            format!("**{}** (`{}`) (Flavor: {})", color_name.to_uppercase(), converted_color_display, selected_flavor.to_string().to_uppercase()),
+                                            false,
+                                        )
                                 .field("\u{200b}", "**Color Swatch:** \u{2588}\u{2588}\u{2588}\u{2588}\u{2588}", false);
 
                             let builder = serenity::builder::CreateMessage::new().embed(embed);
@@ -842,6 +1100,16 @@ impl EventHandler for Handler {
 
             // --- Image Processing Logic ---
             if let Some(attachment) = msg.attachments.first() {
+                // Acquire semaphore permit for processing
+                let _permit = PROCESSING_SEMAPHORE.acquire().await.unwrap();
+                
+                // Send queue status if there are other tasks waiting
+                let available_permits = PROCESSING_SEMAPHORE.available_permits();
+                if available_permits == 0 {
+                    if let Err(why) = msg.channel_id.say(&ctx.http, "⏳ Your request is queued. I'll process it as soon as possible!").await {
+                        eprintln!("Error sending queue message: {:?}", why);
+                    }
+                }
                 println!("Image attachment detected: {}", attachment.url);
                 // Only process if it's an image
                 let content_type_is_image = attachment.content_type.as_deref().map_or(false, |s| s.starts_with("image/"));
@@ -1041,7 +1309,7 @@ impl EventHandler for Handler {
                         "🔍 Decoding image..."
                     ).await;
                 }
-                
+
                 // Load the image from bytes
                 let img = match ImageReader::new(Cursor::new(image_bytes))
                     .with_guessed_format()
@@ -1070,7 +1338,7 @@ impl EventHandler for Handler {
                         "🔄 Converting image format..."
                     ).await;
                 }
-                
+
                 // Convert to RGBA to ensure consistent pixel format for processing
                 let mut rgba_img = img.to_rgba8();
                 let (width, height) = rgba_img.dimensions();
@@ -1147,9 +1415,9 @@ impl EventHandler for Handler {
                         
                         // Apply LUT to the image
                         apply_lut_to_image(&mut flavor_img, &lut);
-                        
-                        // Save the processed image to a buffer
-                        let mut output_buffer = Cursor::new(Vec::new());
+
+                // Save the processed image to a buffer
+                let mut output_buffer = Cursor::new(Vec::new());
                         let output_format = selected_format.unwrap_or_else(|| {
                             match attachment.content_type.as_deref() {
                                 Some("image/png") => ImageFormat::Png,
@@ -1321,15 +1589,15 @@ impl EventHandler for Handler {
                     };
 
                     match dynamic_img.write_to(&mut output_buffer, output_format) {
-                        Ok(_) => {},
-                        Err(e) => {
-                            eprintln!("Error encoding image: {:?}", e);
-                            if let Err(why) = msg.channel_id.say(&ctx.http, "Failed to encode the processed image.").await {
-                                eprintln!("Error sending message: {:?}", why);
-                            }
-                            return;
+                    Ok(_) => {},
+                    Err(e) => {
+                        eprintln!("Error encoding image: {:?}", e);
+                        if let Err(why) = msg.channel_id.say(&ctx.http, "Failed to encode the processed image.").await {
+                            eprintln!("Error sending message: {:?}", why);
                         }
+                        return;
                     }
+                }
 
                     println!("Sending processed image back to Discord...");
                     
@@ -1343,13 +1611,13 @@ impl EventHandler for Handler {
                                 selected_flavor.to_string().to_uppercase(), elapsed)
                         ).await;
                     }
-                    
-                    // Send the processed image back to Discord
+
+                // Send the processed image back to Discord
                     let filename = format!("catppuccinified_{}.{}", 
                         selected_flavor.to_string().to_lowercase(), 
                         output_format.extensions_str().first().unwrap_or(&"png")
                     );
-                    let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), filename.clone());
+                let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), filename.clone());
 
                     let mut message_content = format!("Here's your Catppuccinified image (Flavor: {})!", selected_flavor.to_string().to_uppercase());
                     
@@ -1364,9 +1632,9 @@ impl EventHandler for Handler {
                     let message_builder = serenity::builder::CreateMessage::new().content(message_content);
 
                     if let Err(why) = msg.channel_id.send_files(&ctx.http, vec![attachment_data], message_builder).await {
-                        eprintln!("Error sending image: {:?}", why);
-                        if let Err(why) = msg.channel_id.say(&ctx.http, "Failed to upload the processed image.").await {
-                            eprintln!("Error sending message: {:?}", why);
+                    eprintln!("Error sending image: {:?}", why);
+                    if let Err(why) = msg.channel_id.say(&ctx.http, "Failed to upload the processed image.").await {
+                        eprintln!("Error sending message: {:?}", why);
                         }
                     } else {
                         println!("Processed image sent successfully.");
