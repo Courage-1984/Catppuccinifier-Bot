@@ -8,7 +8,7 @@ edition = "2021"
 
 [dependencies]
 serenity = { version = "0.12", features = ["client", "gateway", "rustls_backend", "standard_framework"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] } # Required for async operations
+tokio = { version = "1", features = ["full"] } # Required for async operations
 catppuccin = "2.5.1" # Corrected: The crate for color conversion is 'catppuccin', version 2.5.1
 regex = "1.10" # For hex color validation
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] } # For image processing, enable common formats
@@ -25,3 +25,4 @@ tracing-appender = "0.2"
 dashmap = "5"
 gif = "0.12"
 rand = "0.8"
+indicatif = "0.17" # For progress bars and console output

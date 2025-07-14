@@ -19,6 +19,9 @@ use dashmap::DashMap;
 use serenity::model::id::UserId;
 use std::sync::Arc;
 use image::GenericImageView;
+use indicatif::{ProgressBar, ProgressStyle};
+use std::time::Duration;
+use tokio::signal;
 
 static IMAGE_PROCESSING_SEMAPHORE: Lazy<Semaphore> = Lazy::new(|| Semaphore::const_new(2));
 static CANCEL_FLAGS: Lazy<DashMap<UserId, Arc<std::sync::atomic::AtomicBool>>> = Lazy::new(DashMap::new);
@@ -45,20 +48,52 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
 
     // Help command
     if parts.get(0).map_or(false, |&p| p == "-h" || p == "--help" || p == "help") {
+        // Start typing indicator for help command
+        let _typing = msg.channel_id.start_typing(&ctx.http);
+        
+        // Create progress bar for help command
+        let progress_bar = ProgressBar::new_spinner();
+        progress_bar.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} {wide_msg}")
+                .unwrap()
+        );
+        progress_bar.set_message("📚 Preparing help message...");
+        progress_bar.enable_steady_tick(Duration::from_millis(100));
+        
         if let Err(why) = crate::commands::send_help_message(ctx, msg.channel_id).await {
+            progress_bar.finish_with_message("❌ Error sending help message");
             error!(?why, "Error sending help message");
             let _ = msg.channel_id.say(&ctx, "❌ Failed to send help message. Please try again later or contact the bot maintainer.").await;
+        } else {
+            progress_bar.finish_with_message("✅ Help message sent successfully!");
         }
         return Ok(());
     }
 
     // Palette command
     if parts.get(0) == Some(&"palette") {
+        // Start typing indicator for palette command
+        let _typing = msg.channel_id.start_typing(&ctx.http);
+        
+        // Create progress bar for palette command
+        let progress_bar = ProgressBar::new_spinner();
+        progress_bar.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} {wide_msg}")
+                .unwrap()
+        );
+        progress_bar.set_message("🎨 Generating palette preview...");
+        progress_bar.enable_steady_tick(Duration::from_millis(100));
+        
         if let Some(&flavor) = parts.get(1) {
             if flavor == "all" {
+                let progress_msg = "🎨 Generating all palette previews...";
+                progress_bar.set_message(progress_msg);
                 let palette_img = palette::generate_all_palettes_preview();
                 let mut output_buffer = std::io::Cursor::new(Vec::new());
                 if let Err(e) = palette_img.write_to(&mut output_buffer, image::ImageFormat::Png) {
+                    progress_bar.finish_with_message("❌ Failed to generate all palettes preview");
                     error!(?e, "Failed to generate all palettes preview");
                     let _ = msg.channel_id.say(&ctx, "❌ Failed to generate palette preview. Please try again later.").await;
                     return Ok(());
@@ -66,15 +101,22 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
                 let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), "catppuccin_palettes_all.png");
                 let message_content = "**All Catppuccin Color Palettes**\nFrom left to right: Latte, Frappe, Macchiato, Mocha";
                 let message_builder = serenity::builder::CreateMessage::new().content(message_content);
+                let progress_msg = "📤 Uploading all palette previews...";
+                progress_bar.set_message(progress_msg);
                 if let Err(e) = msg.channel_id.send_files(&ctx, vec![attachment_data], message_builder).await {
+                    progress_bar.finish_with_message("❌ Failed to send all palettes preview");
                     error!(?e, "Failed to send all palettes preview");
                     let _ = msg.channel_id.say(&ctx, "❌ Failed to send palette preview. Please try again later.").await;
+                } else {
+                    progress_bar.finish_with_message("✅ All palette previews uploaded successfully!");
                 }
                 return Ok(());
             } else if let Some(flavor_enum) = utils::parse_flavor(flavor) {
+                progress_bar.set_message("🎨 Generating palette preview...");
                 let palette_img = palette::generate_palette_preview(flavor_enum);
                 let mut output_buffer = std::io::Cursor::new(Vec::new());
                 if let Err(e) = palette_img.write_to(&mut output_buffer, image::ImageFormat::Png) {
+                    progress_bar.finish_with_message("❌ Failed to generate palette preview");
                     error!(?e, "Failed to generate palette preview for flavor: {}", flavor);
                     let _ = msg.channel_id.say(&ctx, "❌ Failed to generate palette preview. Please try again later.").await;
                     return Ok(());
@@ -83,19 +125,38 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
                 let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), filename);
                 let message_content = format!("**Catppuccin {} Color Palette**", flavor_enum.to_string().to_uppercase());
                 let message_builder = serenity::builder::CreateMessage::new().content(message_content);
+                let progress_msg = "📤 Uploading palette preview...";
+                progress_bar.set_message(progress_msg);
                 if let Err(e) = msg.channel_id.send_files(&ctx, vec![attachment_data], message_builder).await {
+                    progress_bar.finish_with_message("❌ Failed to send palette preview");
                     error!(?e, "Failed to send palette preview for flavor: {}", flavor);
                     let _ = msg.channel_id.say(&ctx, "❌ Failed to send palette preview. Please try again later.").await;
+                } else {
+                    progress_bar.finish_with_message("✅ Palette preview uploaded successfully!");
                 }
                 return Ok(());
             }
         }
+        progress_bar.finish_with_message("❌ Invalid palette command");
         let _ = msg.channel_id.say(&ctx, "❌ Invalid palette command. Use `!cat palette [flavor]` or `!cat palette all`. Try `!cat help` for more info.").await;
         return Ok(());
     }
 
     // List command
     if parts.get(0).map_or(false, |&p| p == "list") {
+        // Start typing indicator for list command
+        let _typing = msg.channel_id.start_typing(&ctx.http);
+        
+        // Create progress bar for list command
+        let progress_bar = ProgressBar::new_spinner();
+        progress_bar.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} {wide_msg}")
+                .unwrap()
+        );
+        progress_bar.set_message("📋 Preparing available options list...");
+        progress_bar.enable_steady_tick(Duration::from_millis(100));
+        
         let flavors = ["latte", "frappe", "macchiato", "mocha"];
         let algorithms = [
             "shepards-method", "gaussian-rbf", "linear-rbf", "gaussian-sampling", "nearest-neighbor", "hald", "euclide", "mean", "std"
@@ -108,31 +169,66 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
         for a in &algorithms { message.push_str(&format!("- `{}`\n", a)); }
         message.push_str("\n**Formats:**\n");
         for fmt in &formats { message.push_str(&format!("- `{}`\n", fmt)); }
+        let progress_msg = "📤 Sending options list...";
+        progress_bar.set_message(progress_msg);
         let _ = msg.channel_id.say(&ctx, message).await;
+        progress_bar.finish_with_message("✅ Options list sent successfully!");
         return Ok(());
     }
 
     // Check for cancel subcommand
     if parts.get(0).map_or(false, |&p| p == "cancel") {
+        // Start typing indicator for cancel command
+        let _typing = msg.channel_id.start_typing(&ctx.http);
+        
+        // Create progress bar for cancel command
+        let progress_bar = ProgressBar::new_spinner();
+        progress_bar.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} {wide_msg}")
+                .unwrap()
+        );
+        progress_bar.set_message("🛑 Cancelling your job...");
+        progress_bar.enable_steady_tick(Duration::from_millis(100));
+        
         let user_id = msg.author.id;
         let flag = CANCEL_FLAGS.entry(user_id).or_insert_with(|| Arc::new(std::sync::atomic::AtomicBool::new(false)));
         flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        let progress_msg = "📤 Sending cancellation confirmation...";
+        progress_bar.set_message(progress_msg);
         let _ = msg.channel_id.say(&ctx, "🛑 Your Catppuccinify job will be cancelled if running.").await;
+        progress_bar.finish_with_message("✅ Cancellation request processed!");
         return Ok(());
     }
 
     // Random color or palette command
     if parts.get(0).map_or(false, |&p| p == "random") {
+        // Start typing indicator for random commands
+        let _typing = msg.channel_id.start_typing(&ctx.http);
+        
+        // Create progress bar for random commands
+        let progress_bar = ProgressBar::new_spinner();
+        progress_bar.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} {wide_msg}")
+                .unwrap()
+        );
+        progress_bar.set_message("🎲 Generating random Catppuccin content...");
+        progress_bar.enable_steady_tick(Duration::from_millis(100));
+        
         use rand::seq::SliceRandom;
         use catppuccin::PALETTE;
         let flavors = ["latte", "frappe", "macchiato", "mocha"];
         if parts.get(1).map_or(false, |&p| p == "palette") {
             // Random palette preview
+            let progress_msg = "🎨 Generating random palette preview...";
+            progress_bar.set_message(progress_msg);
             let flavor = flavors.choose(&mut rand::thread_rng()).unwrap();
             let flavor_enum = utils::parse_flavor(flavor).unwrap();
             let palette_img = palette::generate_palette_preview(flavor_enum);
             let mut output_buffer = std::io::Cursor::new(Vec::new());
             if let Err(_e) = palette_img.write_to(&mut output_buffer, image::ImageFormat::Png) {
+                progress_bar.finish_with_message("❌ Failed to generate palette preview");
                 let _ = msg.channel_id.say(&ctx, "❌ Failed to generate palette preview.").await;
                 return Ok(());
             }
@@ -140,10 +236,15 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
             let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), filename);
             let message_content = format!("**Random Catppuccin Palette: {}**", flavor.to_uppercase());
             let message_builder = serenity::builder::CreateMessage::new().content(message_content);
+            let progress_msg = "📤 Uploading random palette...";
+            progress_bar.set_message(progress_msg);
             let _ = msg.channel_id.send_files(&ctx, vec![attachment_data], message_builder).await;
+            progress_bar.finish_with_message("✅ Random palette uploaded successfully!");
             return Ok(());
     } else {
             // Random color
+            let progress_msg = "🎨 Selecting random color...";
+            progress_bar.set_message(progress_msg);
             let flavor = flavors.choose(&mut rand::thread_rng()).unwrap();
             let flavor_enum = utils::parse_flavor(flavor).unwrap();
             let colors_struct = match flavor_enum {
@@ -187,7 +288,10 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
             };
             let hex = format!("#{:02X}{:02X}{:02X}", color.rgb.r, color.rgb.g, color.rgb.b);
             let message = format!("**Random Catppuccin Color**\nFlavor: `{}`\nColor: `{}`\nHex: `{}`\nSwatch: ` [48;2;{};{};{}m      [0m`", flavor, color_name, hex, color.rgb.r, color.rgb.g, color.rgb.b);
+            let progress_msg = "📤 Sending random color...";
+            progress_bar.set_message(progress_msg);
             let _ = msg.channel_id.say(&ctx, message).await;
+            progress_bar.finish_with_message("✅ Random color sent successfully!");
             return Ok(());
         }
     }
@@ -196,7 +300,7 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
     let mut selected_flavor = utils::parse_flavor("latte").unwrap();
     let mut selected_algorithm = "shepards-method"; // Default algorithm
     let mut batch_mode = false;
-    let mut selected_format = None;
+    let selected_format = None;
 
     if arg_string.split_whitespace().any(|arg| arg == "-f") {
         selected_algorithm = "nearest-neighbor";
@@ -218,9 +322,23 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
 
     // Batch processing logic for multiple attachments
     if batch_mode && !msg.attachments.is_empty() {
+        // Start typing indicator for batch processing
+        let _typing = msg.channel_id.start_typing(&ctx.http);
+        
+        // Create progress bar for batch processing
+        let progress_bar = ProgressBar::new_spinner();
+        progress_bar.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} {wide_msg}")
+                .unwrap()
+        );
+        progress_bar.set_message("🔄 Starting batch processing...");
+        progress_bar.enable_steady_tick(Duration::from_millis(100));
+        
         let mut processed_attachments = Vec::new();
         let mut failed_count = 0;
-        for attachment in msg.attachments.iter() {
+        for (_i, attachment) in msg.attachments.iter().enumerate() {
+            progress_bar.set_message("📥 Processing image...");
             let content_type_is_image = attachment.content_type.as_deref().map_or(false, |s| s.starts_with("image/"));
             if !content_type_is_image {
                 continue;
@@ -266,6 +384,8 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
             processed_attachments.push(attachment_data);
         }
         if !processed_attachments.is_empty() {
+            let _processed_count = processed_attachments.len();
+            progress_bar.set_message("📤 Uploading batch processed images...");
             let message_content = if failed_count > 0 {
                 format!("Here are your Catppuccinified images! ({} failed)", failed_count)
             } else {
@@ -273,15 +393,18 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
             };
             let message_builder = serenity::builder::CreateMessage::new().content(message_content);
             let _ = msg.channel_id.send_files(&ctx, processed_attachments, message_builder).await;
+            progress_bar.finish_with_message("✅ Batch processing completed!");
         } else {
+            progress_bar.finish_with_message("❌ Failed to process any images. Please ensure your attachments are valid images.");
             let _ = msg.channel_id.say(&ctx, "Failed to process any images. Please ensure your attachments are valid images.").await;
         }
         return Ok(());
     }
 
     // For now, focus on image processing for a single image attachment or image URL
-    // Start typing indicator (ephemeral)
+    // Start typing indicator and keep it active during processing
     let _typing = msg.channel_id.start_typing(&ctx.http);
+    
     // Validate user input length
     if arg_string.len() > 300 {
         let _ = msg.channel_id.say(&ctx, "❌ Command too long. Please keep your command under 300 characters.").await;
@@ -308,7 +431,19 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
     };
     if let Some(image_url) = image_source {
         info!(url = %image_url, "Processing image from URL or attachment");
+        
+        // Create progress bar for console output
+        let progress_bar = ProgressBar::new_spinner();
+        progress_bar.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} {wide_msg}")
+                .unwrap()
+        );
+        progress_bar.set_message("🔄 Starting image processing...");
+        progress_bar.enable_steady_tick(Duration::from_millis(100));
+        
         // Download the image
+        progress_bar.set_message("📥 Downloading image...");
         let response = reqwest::get(image_url).await;
         if let Ok(resp) = response {
             // Check file size limit (8 MB)
@@ -320,15 +455,19 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
             }
             let bytes = resp.bytes().await;
             if let Ok(image_bytes) = bytes {
+                progress_bar.set_message("✅ Image downloaded successfully");
                 if image_bytes.len() > 8 * 1024 * 1024 {
+                    progress_bar.finish_with_message("❌ Image is too large. Maximum allowed size is 8 MB.");
                     let _ = msg.channel_id.say(&ctx, "❌ Image is too large. Maximum allowed size is 8 MB.").await;
                     return Ok(());
                 }
+                progress_bar.set_message("🔍 Analyzing image format...");
                 let img_reader = ImageReader::new(std::io::Cursor::new(&image_bytes)).with_guessed_format();
                 if let Ok(reader) = img_reader {
                     let format = reader.format();
                     if let Some(image::ImageFormat::Gif) = format {
                         // Animated GIF: process all frames
+                        progress_bar.set_message("🎬 Detected animated GIF - processing all frames...");
                         let permit = IMAGE_PROCESSING_SEMAPHORE.acquire().await.expect("Semaphore closed");
                         let _ = msg.channel_id.say(&ctx, "🕒 Processing animated GIF (all frames)...").await;
                         let selected_flavor = selected_flavor.clone();
@@ -340,20 +479,27 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
                         drop(permit);
                         match processing_result {
                             Ok(Ok(gif_bytes)) => {
+                                progress_bar.set_message("✅ GIF processing completed successfully");
                                 let filename = format!("catppuccinified_{}.gif", selected_flavor.to_string().to_lowercase());
                                 let attachment_data = serenity::builder::CreateAttachment::bytes(gif_bytes, filename);
                                 let message_content = format!("**Catppuccinified GIF with {}**", selected_flavor.to_string());
                                 let message_builder = serenity::builder::CreateMessage::new().content(message_content);
+                                progress_bar.set_message("📤 Uploading processed GIF...");
                                 if let Err(e) = msg.channel_id.send_files(&ctx, vec![attachment_data], message_builder).await {
+                                    progress_bar.finish_with_message("❌ Failed to send processed GIF");
                                     error!(?e, "Failed to send processed GIF");
                                     let _ = msg.channel_id.say(&ctx, "❌ Failed to send processed GIF. Please try again later.").await;
+                                } else {
+                                    progress_bar.finish_with_message("✅ GIF uploaded successfully!");
                                 }
                             }
                             Ok(Err(e)) => {
+                                progress_bar.finish_with_message("❌ Failed to process GIF");
                                 error!(?e, "Failed to process GIF");
                                 let _ = msg.channel_id.say(&ctx, &format!("❌ Failed to process GIF: {e}")).await;
                             }
                                 Err(e) => {
+                                progress_bar.finish_with_message("❌ GIF processing panicked or failed to run");
                                 error!(?e, "GIF processing panicked or failed to run");
                                 let _ = msg.channel_id.say(&ctx, "❌ GIF processing failed unexpectedly. Please try again or contact the bot maintainer.").await;
                             }
@@ -361,12 +507,16 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
                         return Ok(());
                     }
                     if let Ok(img) = reader.decode() {
+                        progress_bar.set_message("✅ Image decoded successfully");
                         let (width, height) = img.dimensions();
+                        progress_bar.set_message("📐 Image dimensions analyzed");
                         if width > 4096 || height > 4096 {
+                            progress_bar.finish_with_message("❌ Image dimensions are too large. Maximum allowed is 4096x4096 pixels.");
                             let _ = msg.channel_id.say(&ctx, "❌ Image dimensions are too large. Maximum allowed is 4096x4096 pixels.").await;
                             return Ok(());
                         }
                         // Process the image using the selected flavor and algorithm
+                        progress_bar.set_message("🎨 Processing with flavor and algorithm...");
                         let permit = IMAGE_PROCESSING_SEMAPHORE.acquire().await.expect("Semaphore closed");
                         let _ = msg.channel_id.say(&ctx, "🕒 Your image is now being processed...").await;
                         let selected_flavor = selected_flavor.clone();
@@ -395,44 +545,56 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
                         drop(permit);
                         match processing_result {
                             Ok(Ok(image_bytes)) => {
+                                progress_bar.set_message("✅ Image processing completed successfully");
                                 let filename = format!("catppuccinified_{}.png", selected_flavor.to_string().to_lowercase());
                                 let attachment_data = serenity::builder::CreateAttachment::bytes(image_bytes, filename);
                                 let message_content = format!("**Catppuccinified with {}**", selected_flavor.to_string());
                         let message_builder = serenity::builder::CreateMessage::new().content(message_content);
+                                progress_bar.set_message("📤 Uploading processed image...");
                                 if let Err(e) = msg.channel_id.send_files(&ctx, vec![attachment_data], message_builder).await {
+                                    progress_bar.finish_with_message("❌ Failed to send processed image");
                                     error!(?e, "Failed to send processed image");
                                     let _ = msg.channel_id.say(&ctx, "❌ Failed to send processed image. Please try again later.").await;
+                                } else {
+                                    progress_bar.finish_with_message("✅ Image uploaded successfully!");
                                 }
                             }
                             Ok(Err(e)) => {
                                 if e.kind() == std::io::ErrorKind::Interrupted {
+                                    progress_bar.finish_with_message("🛑 Your Catppuccinify job was cancelled.");
                                     let _ = msg.channel_id.say(&ctx, "🛑 Your Catppuccinify job was cancelled.").await;
                                 } else {
+                                    progress_bar.finish_with_message("❌ Failed to write processed image");
                                     error!(?e, "Failed to write processed image");
                                     let _ = msg.channel_id.say(&ctx, "❌ Failed to process image after conversion. Please try a different image or contact the bot maintainer.").await;
                                 }
                             }
                             Err(e) => {
+                                progress_bar.finish_with_message("❌ Image processing panicked or failed to run");
                                 error!(?e, "Image processing panicked or failed to run");
                                 let _ = msg.channel_id.say(&ctx, "❌ Image processing failed unexpectedly. Please try again or contact the bot maintainer.").await;
                             }
                         }
                         return Ok(());
                     }
+                    progress_bar.finish_with_message("❌ Failed to decode image");
                     error!(url = %image_url, "Failed to decode image");
                     let _ = msg.channel_id.say(&ctx, "❌ Failed to decode the image. Please ensure your image is a supported format (PNG, JPEG, etc.) and not corrupted.").await;
                     return Ok(());
                         } else {
+                    progress_bar.finish_with_message("❌ Failed to create image reader");
                     error!(url = %image_url, "Failed to create image reader");
                     let _ = msg.channel_id.say(&ctx, "❌ Failed to read the image. Please try a different image or format.").await;
                     return Ok(());
                     }
                 } else {
+                progress_bar.finish_with_message("❌ Failed to download image bytes");
                 error!(url = %image_url, "Failed to download image bytes");
                 let _ = msg.channel_id.say(&ctx, "❌ Failed to download the image. Please check the URL or try re-uploading your image.").await;
                 return Ok(());
                         }
                     } else {
+            progress_bar.finish_with_message("❌ Failed to fetch image from URL");
             error!(url = %image_url, "Failed to fetch image from URL");
             let _ = msg.channel_id.say(&ctx, "❌ Failed to fetch the image from the provided URL. Please check the URL and try again.").await;
             return Ok(());
@@ -469,6 +631,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .event_handler(commands::Handler)
         .await
         .expect("Error creating client");
+
+    // Spawn a task to listen for shutdown signals
+    let token_clone = token.clone();
+    tokio::spawn(async move {
+        // Wait for Ctrl+C or SIGTERM
+        let _ = signal::ctrl_c().await;
+        let http = serenity::http::Http::new(&token_clone);
+        let channel_id = serenity::model::id::ChannelId::from(1393064541063221319u64);
+        let _ = channel_id.say(&http, "🔴 Catppuccinifier Bot is now offline!").await;
+        // Give the message a moment to send
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        std::process::exit(0);
+    });
+
     if let Err(why) = client.start().await {
         info!(?why, "Client error");
     }
