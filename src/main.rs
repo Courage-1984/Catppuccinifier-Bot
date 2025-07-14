@@ -638,8 +638,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Wait for Ctrl+C or SIGTERM
         let _ = signal::ctrl_c().await;
         let http = serenity::http::Http::new(&token_clone);
-        let channel_id = serenity::model::id::ChannelId::from(1393064541063221319u64);
-        let _ = channel_id.say(&http, "🔴 Catppuccinifier Bot is now offline!").await;
+        let channel_ids = [
+            serenity::model::id::ChannelId::from(1393064541063221319u64),
+            serenity::model::id::ChannelId::from(465193124852138011u64),
+        ];
+        for channel_id in channel_ids.iter() {
+            let _ = channel_id.say(&http, "🔴 Catppuccinifier Bot is now offline!").await;
+        }
         // Give the message a moment to send
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         std::process::exit(0);

@@ -600,8 +600,13 @@ impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: serenity::model::gateway::Ready) {
         info!("{} is connected!", ready.user.name);
         info!("Bot is ready!");
-        // Announce online in the specified channel
-        let channel_id = serenity::model::id::ChannelId::from(1393064541063221319u64);
-        let _ = channel_id.say(&ctx.http, "🟢 Catppuccinifier Bot is now online!").await;
+        // Announce online in both specified channels
+        let channel_ids = [
+            serenity::model::id::ChannelId::from(1393064541063221319u64),
+            serenity::model::id::ChannelId::from(465193124852138011u64),
+        ];
+        for channel_id in channel_ids.iter() {
+            let _ = channel_id.say(&ctx.http, "🟢 Catppuccinifier Bot is now online!").await;
+        }
     }
 } 
