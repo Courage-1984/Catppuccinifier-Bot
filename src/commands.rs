@@ -12,6 +12,82 @@ use tracing::{info, warn, error, debug};
 use crate::utils::MOCHA_MAUVE;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
+use serenity::model::prelude::interaction::{Interaction, InteractionResponseType};
+use serenity::builder::{CreateButton, CreateActionRow};
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+use image::Rgba;
+
+// --- Color conversion helpers for harmony ---
+fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let r = r as f32 / 255.0;
+    let g = g as f32 / 255.0;
+    let b = b as f32 / 255.0;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+    let d = max - min;
+    let (h, s);
+    if d == 0.0 {
+        h = 0.0;
+        s = 0.0;
+    } else {
+        s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+        h = if max == r {
+            ((g - b) / d) % 6.0
+        } else if max == g {
+            ((b - r) / d) + 2.0
+        } else {
+            ((r - g) / d) + 4.0
+        } * 60.0;
+    }
+    let h = if h < 0.0 { h + 360.0 } else { h };
+    (h, s, l)
+}
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let h_ = h / 60.0;
+    let x = c * (1.0 - ((h_ % 2.0) - 1.0).abs());
+    let (r1, g1, b1) = if (0.0..1.0).contains(&h_) {
+        (c, x, 0.0)
+    } else if (1.0..2.0).contains(&h_) {
+        (x, c, 0.0)
+    } else if (2.0..3.0).contains(&h_) {
+        (0.0, c, x)
+    } else if (3.0..4.0).contains(&h_) {
+        (0.0, x, c)
+    } else if (4.0..5.0).contains(&h_) {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+    let m = l - c / 2.0;
+    let r = ((r1 + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+    let g = ((g1 + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+    let b = ((b1 + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+    (r, g, b)
+}
+
+// --- Color blindness simulation helper ---
+fn simulate_color_blindness(r: u8, g: u8, b: u8, kind: &str) -> (u8, u8, u8) {
+    // Matrices from https://ixora.io/projects/colorblindness/color-blindness-simulation-research/
+    let (m0, m1, m2) = match kind {
+        "protanopia" => ([0.56667, 0.43333, 0.0], [0.55833, 0.44167, 0.0], [0.0, 0.24167, 0.75833]),
+        "deuteranopia" => ([0.625, 0.375, 0.0], [0.7, 0.3, 0.0], [0.0, 0.3, 0.7]),
+        "tritanopia" => ([0.95, 0.05, 0.0], [0.0, 0.43333, 0.56667], [0.0, 0.475, 0.525]),
+        _ => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+    };
+    let rf = r as f32;
+    let gf = g as f32;
+    let bf = b as f32;
+    let r2 = (m0[0] * rf + m0[1] * gf + m0[2] * bf).clamp(0.0, 255.0);
+    let g2 = (m1[0] * rf + m1[1] * gf + m1[2] * bf).clamp(0.0, 255.0);
+    let b2 = (m2[0] * rf + m2[1] * gf + m2[2] * bf).clamp(0.0, 255.0);
+    (r2.round() as u8, g2.round() as u8, b2.round() as u8)
+}
+
+// Store pending color analysis confirmations: (user_id, channel_id) -> (image bytes, suggested flavor, algorithm, etc.)
+static COLOR_CONFIRM_MAP: Lazy<Mutex<std::collections::HashMap<(u64, u64), (Vec<u8>, image::ImageFormat, u32, u32, catppuccin::FlavorName, String)>>> = Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
 
 pub struct Handler;
 
@@ -34,8 +110,9 @@ pub async fn send_help_message(ctx: &Context, channel_id: serenity::model::id::C
 `!cat palette all` - Show all flavors' color palettes
 
 **Before/After Comparison:**
-`!cat compare [image]` - Send original + processed image side by side"#,
-        r#"**Batch Processing:**
+`!cat compare [image]` - Send original + processed image side by side
+
+**Batch Processing:**
 `!cat batch [multiple images]` - Process multiple images at once
 
 **Quality Settings:**
@@ -48,7 +125,32 @@ pub async fn send_help_message(ctx: &Context, channel_id: serenity::model::id::C
 `!cat [flavor] [format] [image]` - format: png, jpg, webp
 
 **All Flavors Processing:**
-`!cat all [image]` - Process image with all 4 flavors (Latte, Frappe, Macchiato, Mocha)"#,
+`!cat all [image]` - Process image with all 4 flavors (Latte, Frappe, Macchiato, Mocha)
+
+**Random Color/Palette:**
+`!cat random` - Get a random Catppuccin color
+`!cat random palette` - Get a random palette preview
+
+**List Options:**
+`!cat list` - List all flavors, algorithms, formats
+
+**Cancel:**
+`!cat cancel` - Cancel your current job
+
+**Help:**
+`!cat -h` or `!cat help` - Show this help message
+"#,
+        r#"**Advanced Color Analysis & Creative Features:**
+
+`!cat extract [image]`      - Extract the actual color palette from an image
+`!cat harmony [image]`      - Show complementary, analogous, triadic colors for the dominant color
+`!cat simulate [type] [image]` - Simulate color blindness (protanopia, deuteranopia, tritanopia)
+`!cat temperature [image]`  - Analyze and report the proportion of warm vs cool colors
+`!cat gradient [colors]`    - Generate a gradient from Catppuccin color names or hex codes
+`!cat scheme [type] [image]` - Preview color schemes (complementary, analogous, triadic, monochromatic)
+`!cat animate [effect] [image]` - Add animation effects (e.g., fade) to images as GIF
+`!cat texture [type] [image]` - Overlay Catppuccin-themed textures (dots, stripes) on images
+"#,
         r#"**Available Flavors:**
 • `latte` - Light, warm theme
 • `frappe` - Medium, balanced theme  
@@ -64,8 +166,9 @@ pub async fn send_help_message(ctx: &Context, channel_id: serenity::model::id::C
 • `hald` - Hald CLUT method
 • `euclide` - Euclidean distance
 • `mean` - Mean-based mapping
-• `std` - Standard deviation method"#,
-        r#"**Quality Levels:**
+• `std` - Standard deviation method
+
+**Quality Levels:**
 • `fast` - Nearest neighbor (fastest)
 • `normal` - Shepard's method (balanced)
 • `high` - Gaussian sampling (best quality)
@@ -74,7 +177,8 @@ pub async fn send_help_message(ctx: &Context, channel_id: serenity::model::id::C
 • `png` - Lossless, supports transparency
 • `jpg` - Compressed, smaller files
 • `webp` - Modern, good compression
-• `gif` - Animated images"#,
+• `gif` - Animated images
+"#,
         r#"**Examples:**
 `!cat mocha shepards [image]` - Mocha flavor with Shepard's method
 `!cat frappe gaussian [image]` - Frappe flavor with Gaussian algorithm
@@ -84,8 +188,12 @@ pub async fn send_help_message(ctx: &Context, channel_id: serenity::model::id::C
 `!cat mocha high [image]` - High quality Mocha processing
 `!cat latte png [image]` - Export as PNG format
 
-**Help:**
-`!cat -h` or `!cat help` - Show this help message"#
+**Creative Examples:**
+`!cat gradient rosewater mauve blue` - Gradient from Catppuccin colors
+`!cat scheme triadic [image]` - Triadic color scheme preview
+`!cat animate fade [image]` - Fade animation effect
+`!cat texture dots [image]` - Dots texture overlay
+"#
     ];
     for (i, help_part) in help_parts.iter().enumerate() {
         let part_number = if help_parts.len() > 1 {
@@ -183,10 +291,448 @@ impl EventHandler for Handler {
                     show_palette = true;
                 } else if parts[1] == "compare" {
                     show_comparison = true;
+                } else if parts[1] == "gradient" {
+                    // --- GRADIENT GENERATION SUBCOMMAND ---
+                    // Usage: !cat gradient [color1] [color2] ...
+                    let mut color_args = parts[2..].to_vec();
+                    let mut flavor = utils::parse_flavor("latte").unwrap();
+                    // If the first color arg is a flavor, use it
+                    if let Some(f) = color_args.get(0).and_then(|s| utils::parse_flavor(s)) {
+                        flavor = f;
+                        color_args = color_args[1..].to_vec();
+                    }
+                    if color_args.is_empty() {
+                        let _ = msg.channel_id.say(&ctx.http, "Please provide at least two colors (Catppuccin color names or hex codes). Example: `!cat gradient rosewater mauve blue` or `!cat gradient #f5e0dc #a6e3a1`").await;
+                        return;
+                    }
+                    let mut colors = Vec::new();
+                    for arg in color_args.iter() {
+                        // Try Catppuccin color name
+                        if let Some(rgb) = utils::catppuccin_color_name_to_rgb(arg, flavor) {
+                            colors.push(rgb);
+                        } else {
+                            // Try hex code
+                            let hex = arg.trim_start_matches('#');
+                            if hex.len() == 6 || hex.len() == 3 {
+                                let parse_hex = |h: &str| -> Option<(u8, u8, u8)> {
+                                    if h.len() == 6 {
+                                        Some((
+                                            u8::from_str_radix(&h[0..2], 16).ok()?,
+                                            u8::from_str_radix(&h[2..4], 16).ok()?,
+                                            u8::from_str_radix(&h[4..6], 16).ok()?,
+                                        ))
+                                    } else if h.len() == 3 {
+                                        Some((
+                                            u8::from_str_radix(&h[0..1].repeat(2), 16).ok()?,
+                                            u8::from_str_radix(&h[1..2].repeat(2), 16).ok()?,
+                                            u8::from_str_radix(&h[2..3].repeat(2), 16).ok()?,
+                                        ))
+                                    } else {
+                                        None
+                                    }
+                                };
+                                if let Some(rgb) = parse_hex(hex) {
+                                    colors.push(rgb);
+                                }
+                            }
+                        }
+                    }
+                    if colors.len() < 2 {
+                        let _ = msg.channel_id.say(&ctx.http, "Please provide at least two valid colors (Catppuccin color names or hex codes). Example: `!cat gradient rosewater mauve blue` or `!cat gradient #f5e0dc #a6e3a1`").await;
+                        return;
+                    }
+                    // Start typing indicator
+                    let _typing = msg.channel_id.start_typing(&ctx.http);
+                    let progress_bar = ProgressBar::new_spinner();
+                    progress_bar.set_style(
+                        ProgressStyle::default_spinner()
+                            .template("{spinner:.green} {wide_msg}")
+                            .unwrap()
+                    );
+                    progress_bar.set_message("🌈 Generating gradient image...");
+                    progress_bar.enable_steady_tick(Duration::from_millis(100));
+                    let width = 512u32;
+                    let height = 80u32;
+                    let gradient_img = palette::generate_gradient_image(&colors, width, height);
+                    let mut output_buffer = std::io::Cursor::new(Vec::new());
+                    if let Err(_e) = gradient_img.write_to(&mut output_buffer, image::ImageFormat::Png) {
+                        progress_bar.finish_with_message("❌ Failed to generate gradient image");
+                        let _ = msg.channel_id.say(&ctx.http, "Failed to generate gradient image.").await;
+                        return;
+                    }
+                    let filename = crate::utils::sanitize_filename("catppuccin_gradient.png", "png");
+                    let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), filename);
+                    let hex_list = colors.iter().map(|(r,g,b)| format!("#{:02X}{:02X}{:02X}", r, g, b)).collect::<Vec<_>>().join(" → ");
+                    let message_content = format!("**Catppuccin Gradient**\nColors: {}", hex_list);
+                    let message_builder = serenity::builder::CreateMessage::new().content(message_content);
+                    let _ = msg.channel_id.send_files(&ctx.http, vec![attachment_data], message_builder).await;
+                    progress_bar.finish_with_message("✅ Gradient image sent!");
+                    return;
                 } else if parts[1] == "stats" {
                     show_stats = true;
-                } else if parts[1] == "batch" {
-                    batch_mode = true;
+                } else if parts[1] == "simulate" {
+                    // --- COLOR BLINDNESS SIMULATION SUBCOMMAND ---
+                    let kind = parts.get(2).map(|s| s.to_lowercase()).unwrap_or("protanopia".to_string());
+                    let valid_types = ["protanopia", "deuteranopia", "tritanopia"];
+                    if !valid_types.contains(&kind.as_str()) {
+                        let _ = msg.channel_id.say(&ctx.http, "Please specify a valid simulation type: protanopia, deuteranopia, tritanopia.").await;
+                        return;
+                    }
+                    let attachment = msg.attachments.iter().find(|a| a.width.is_some() && a.height.is_some());
+                    let image_url = if let Some(attachment) = attachment {
+                        Some(attachment.url.as_str().to_string())
+                    } else {
+                        let url_regex = regex::Regex::new(r"^(https?://[\w\-./%?=&]+\.(png|jpe?g|gif|bmp|webp))$").unwrap();
+                        parts.iter().find(|s| url_regex.is_match(s)).map(|s| s.to_string())
+                    };
+                    if let Some(image_url) = image_url {
+                        let _typing = msg.channel_id.start_typing(&ctx.http);
+                        let progress_bar = ProgressBar::new_spinner();
+                        progress_bar.set_style(
+                            ProgressStyle::default_spinner()
+                                .template("{spinner:.green} {wide_msg}")
+                                .unwrap()
+                        );
+                        progress_bar.set_message("👁️ Simulating color blindness...");
+                        progress_bar.enable_steady_tick(Duration::from_millis(100));
+                        let response = reqwest::get(&image_url).await;
+                        if let Ok(resp) = response {
+                            let bytes = resp.bytes().await;
+                            if let Ok(image_bytes) = bytes {
+                                let img_reader = ImageReader::new(std::io::Cursor::new(&image_bytes)).with_guessed_format();
+                                if let Ok(reader) = img_reader {
+                                    if let Ok(img) = reader.decode() {
+                                        let mut rgba_img = img.to_rgba8();
+                                        for pixel in rgba_img.pixels_mut() {
+                                            let (r, g, b, a) = (pixel[0], pixel[1], pixel[2], pixel[3]);
+                                            let (r2, g2, b2) = simulate_color_blindness(r, g, b, &kind);
+                                            *pixel = image::Rgba([r2, g2, b2, a]);
+                                        }
+                                        let mut output_buffer = std::io::Cursor::new(Vec::new());
+                                        if let Err(_e) = rgba_img.write_to(&mut output_buffer, image::ImageFormat::Png) {
+                                            progress_bar.finish_with_message("❌ Failed to generate simulated image");
+                                            let _ = msg.channel_id.say(&ctx.http, "Failed to generate simulated image.").await;
+                                            return;
+                                        }
+                                        let message_content = format!("**Color Blindness Simulation: {}**", kind.to_uppercase());
+                                        let filename = crate::utils::sanitize_filename(&format!("simulated_{}.png", kind), "png");
+                                        let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), filename);
+                                        let message_builder = serenity::builder::CreateMessage::new().content(message_content);
+                                        let _ = msg.channel_id.send_files(&ctx.http, vec![attachment_data], message_builder).await;
+                                        progress_bar.finish_with_message("✅ Simulation sent!");
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        progress_bar.finish_with_message("❌ Failed to simulate color blindness");
+                        let _ = msg.channel_id.say(&ctx.http, "Failed to simulate color blindness. Please ensure your image is valid and accessible.").await;
+                        return;
+                    } else {
+                        let _ = msg.channel_id.say(&ctx.http, "Please attach an image or provide a direct image URL to simulate color blindness.").await;
+                        return;
+                    }
+                } else if parts[1] == "temperature" {
+                    // --- COLOR TEMPERATURE ANALYSIS SUBCOMMAND ---
+                    let attachment = msg.attachments.iter().find(|a| a.width.is_some() && a.height.is_some());
+                    let image_url = if let Some(attachment) = attachment {
+                        Some(attachment.url.as_str().to_string())
+                    } else {
+                        let url_regex = regex::Regex::new(r"^(https?://[\w\-./%?=&]+\.(png|jpe?g|gif|bmp|webp))$").unwrap();
+                        parts.iter().find(|s| url_regex.is_match(s)).map(|s| s.to_string())
+                    };
+                    if let Some(image_url) = image_url {
+                        let _typing = msg.channel_id.start_typing(&ctx.http);
+                        let progress_bar = ProgressBar::new_spinner();
+                        progress_bar.set_style(
+                            ProgressStyle::default_spinner()
+                                .template("{spinner:.green} {wide_msg}")
+                                .unwrap()
+                        );
+                        progress_bar.set_message("🌡️ Analyzing color temperature...");
+                        progress_bar.enable_steady_tick(Duration::from_millis(100));
+                        let response = reqwest::get(&image_url).await;
+                        if let Ok(resp) = response {
+                            let bytes = resp.bytes().await;
+                            if let Ok(image_bytes) = bytes {
+                                let img_reader = ImageReader::new(std::io::Cursor::new(&image_bytes)).with_guessed_format();
+                                if let Ok(reader) = img_reader {
+                                    if let Ok(img) = reader.decode() {
+                                        let rgba_img = img.to_rgba8();
+                                        let mut warm = 0u64;
+                                        let mut cool = 0u64;
+                                        let mut total = 0u64;
+                                        for pixel in rgba_img.pixels() {
+                                            let (r, g, b, _a) = (pixel[0], pixel[1], pixel[2], pixel[3]);
+                                            let (h, _s, _l) = rgb_to_hsl(r, g, b);
+                                            if (h >= 0.0 && h <= 90.0) || (h >= 330.0 && h <= 360.0) {
+                                                warm += 1;
+                                            } else {
+                                                cool += 1;
+                                            }
+                                            total += 1;
+                                        }
+                                        let warm_pct = (warm as f64 / total as f64) * 100.0;
+                                        let cool_pct = (cool as f64 / total as f64) * 100.0;
+                                        let message_content = format!(
+                                            "**Color Temperature Analysis**\nWarm colors: {:.1}%\nCool colors: {:.1}%\n(>50% warm = warm image, >50% cool = cool image)",
+                                            warm_pct, cool_pct
+                                        );
+                                        let _ = msg.channel_id.say(&ctx.http, message_content).await;
+                                        progress_bar.finish_with_message("✅ Color temperature analyzed!");
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        progress_bar.finish_with_message("❌ Failed to analyze color temperature");
+                        let _ = msg.channel_id.say(&ctx.http, "Failed to analyze color temperature. Please ensure your image is valid and accessible.").await;
+                        return;
+                    } else {
+                        let _ = msg.channel_id.say(&ctx.http, "Please attach an image or provide a direct image URL to analyze color temperature.").await;
+                        return;
+                    }
+                } else if parts[1] == "scheme" {
+                    // --- COLOR SCHEME SUBCOMMAND ---
+                    // Usage: !cat scheme [type] [image]
+                    let scheme_type = parts.get(2).map(|s| s.to_lowercase()).unwrap_or("complementary".to_string());
+                    let valid_types = ["monochromatic", "complementary", "analogous", "triadic"];
+                    if !valid_types.contains(&scheme_type.as_str()) {
+                        let _ = msg.channel_id.say(&ctx.http, "Please specify a valid scheme type: monochromatic, complementary, analogous, triadic.").await;
+                        return;
+                    }
+                    let attachment = msg.attachments.iter().find(|a| a.width.is_some() && a.height.is_some());
+                    let image_url = if let Some(attachment) = attachment {
+                        Some(attachment.url.as_str().to_string())
+                    } else {
+                        let url_regex = regex::Regex::new(r"^(https?://[\w\-./%?=&]+\.(png|jpe?g|gif|bmp|webp))$").unwrap();
+                        parts.iter().find(|s| url_regex.is_match(s)).map(|s| s.to_string())
+                    };
+                    if let Some(image_url) = image_url {
+                        let _typing = msg.channel_id.start_typing(&ctx.http);
+                        let progress_bar = ProgressBar::new_spinner();
+                        progress_bar.set_style(
+                            ProgressStyle::default_spinner()
+                                .template("{spinner:.green} {wide_msg}")
+                                .unwrap()
+                        );
+                        progress_bar.set_message("🎨 Analyzing color scheme...");
+                        progress_bar.enable_steady_tick(Duration::from_millis(100));
+                        let response = reqwest::get(&image_url).await;
+                        if let Ok(resp) = response {
+                            let bytes = resp.bytes().await;
+                            if let Ok(image_bytes) = bytes {
+                                let img_reader = ImageReader::new(std::io::Cursor::new(&image_bytes)).with_guessed_format();
+                                if let Ok(reader) = img_reader {
+                                    if let Ok(img) = reader.decode() {
+                                        let rgba_img = img.to_rgba8();
+                                        // Extract most dominant color
+                                        let mut color_counts = std::collections::HashMap::new();
+                                        for pixel in rgba_img.pixels() {
+                                            let key = (pixel[0], pixel[1], pixel[2]);
+                                            *color_counts.entry(key).or_insert(0) += 1;
+                                        }
+                                        let mut sorted_colors: Vec<_> = color_counts.into_iter().collect();
+                                        sorted_colors.sort_by(|a, b| b.1.cmp(&a.1));
+                                        let base_rgb = sorted_colors.get(0).map(|(rgb, _)| *rgb);
+                                        if let Some((r, g, b)) = base_rgb {
+                                            let (h, s, l) = rgb_to_hsl(r, g, b);
+                                            let scheme_colors = match scheme_type.as_str() {
+                                                "monochromatic" => {
+                                                    // 5 tints/shades
+                                                    vec![
+                                                        hsl_to_rgb(h, s, (l * 0.5).clamp(0.0, 1.0)),
+                                                        hsl_to_rgb(h, s, (l * 0.75).clamp(0.0, 1.0)),
+                                                        hsl_to_rgb(h, s, l),
+                                                        hsl_to_rgb(h, s, (l + 0.25).clamp(0.0, 1.0)),
+                                                        hsl_to_rgb(h, s, (l + 0.5).clamp(0.0, 1.0)),
+                                                    ]
+                                                },
+                                                "complementary" => {
+                                                    vec![
+                                                        (r, g, b),
+                                                        hsl_to_rgb((h + 180.0) % 360.0, s, l),
+                                                    ]
+                                                },
+                                                "analogous" => {
+                                                    vec![
+                                                        hsl_to_rgb((h + 330.0) % 360.0, s, l),
+                                                        (r, g, b),
+                                                        hsl_to_rgb((h + 30.0) % 360.0, s, l),
+                                                    ]
+                                                },
+                                                "triadic" => {
+                                                    vec![
+                                                        (r, g, b),
+                                                        hsl_to_rgb((h + 120.0) % 360.0, s, l),
+                                                        hsl_to_rgb((h + 240.0) % 360.0, s, l),
+                                                    ]
+                                                },
+                                                _ => vec![(r, g, b)],
+                                            };
+                                            // Swatch image
+                                            let swatch_size = 80u32;
+                                            let margin = 10u32;
+                                            let width = scheme_colors.len() as u32 * (swatch_size + margin) + margin;
+                                            let height = swatch_size + 2 * margin;
+                                            let mut swatch_img = image::RgbaImage::new(width, height);
+                                            for (i, (r, g, b)) in scheme_colors.iter().enumerate() {
+                                                let x0 = margin + i as u32 * (swatch_size + margin);
+                                                for x in x0..x0 + swatch_size {
+                                                    for y in margin..margin + swatch_size {
+                                                        swatch_img.put_pixel(x, y, image::Rgba([*r, *g, *b, 255]));
+                                                    }
+                                                }
+                                            }
+                                            let mut output_buffer = std::io::Cursor::new(Vec::new());
+                                            if let Err(_e) = swatch_img.write_to(&mut output_buffer, image::ImageFormat::Png) {
+                                                progress_bar.finish_with_message("❌ Failed to generate scheme swatch image");
+                                                let _ = msg.channel_id.say(&ctx.http, "Failed to generate scheme swatch image.").await;
+                                                return;
+                                            }
+                                            // Prepare hex codes
+                                            let hex_codes: Vec<String> = scheme_colors.iter().map(|(r, g, b)| format!("`#{:02X}{:02X}{:02X}`", r, g, b)).collect();
+                                            let hex_list = hex_codes.join(" ");
+                                            let message_content = format!("**{} Color Scheme**\n{}", scheme_type.to_uppercase(), hex_list);
+                                            let filename = crate::utils::sanitize_filename(&format!("color_scheme_{}.png", scheme_type), "png");
+                                            let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), filename);
+                                            let message_builder = serenity::builder::CreateMessage::new().content(message_content);
+                                            let _ = msg.channel_id.send_files(&ctx.http, vec![attachment_data], message_builder).await;
+                                            progress_bar.finish_with_message("✅ Color scheme sent!");
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        progress_bar.finish_with_message("❌ Failed to analyze color scheme");
+                        let _ = msg.channel_id.say(&ctx.http, "Failed to analyze color scheme. Please ensure your image is valid and accessible.").await;
+                        return;
+                    } else {
+                        let _ = msg.channel_id.say(&ctx.http, "Please attach an image or provide a direct image URL to analyze color scheme.").await;
+                        return;
+                    }
+                } else if parts[1] == "animate" {
+                    // --- ANIMATION EFFECT SUBCOMMAND ---
+                    // Usage: !cat animate [effect] [image]
+                    let effect = parts.get(2).map(|s| s.to_lowercase()).unwrap_or("fade".to_string());
+                    let valid_effects = ["fade"];
+                    if !valid_effects.contains(&effect.as_str()) {
+                        let _ = msg.channel_id.say(&ctx.http, "Please specify a valid animation effect: fade.").await;
+                        return;
+                    }
+                    let attachment = msg.attachments.iter().find(|a| a.width.is_some() && a.height.is_some());
+                    let image_url = if let Some(attachment) = attachment {
+                        Some(attachment.url.as_str().to_string())
+                    } else {
+                        let url_regex = regex::Regex::new(r"^(https?://[\w\-./%?=&]+\.(png|jpe?g|gif|bmp|webp))$").unwrap();
+                        parts.iter().find(|s| url_regex.is_match(s)).map(|s| s.to_string())
+                    };
+                    if let Some(image_url) = image_url {
+                        let _typing = msg.channel_id.start_typing(&ctx.http);
+                        let progress_bar = ProgressBar::new_spinner();
+                        progress_bar.set_style(
+                            ProgressStyle::default_spinner()
+                                .template("{spinner:.green} {wide_msg}")
+                                .unwrap()
+                        );
+                        progress_bar.set_message("🎬 Generating animation effect...");
+                        progress_bar.enable_steady_tick(Duration::from_millis(100));
+                        let response = reqwest::get(&image_url).await;
+                        if let Ok(resp) = response {
+                            let bytes = resp.bytes().await;
+                            if let Ok(image_bytes) = bytes {
+                                let img_reader = ImageReader::new(std::io::Cursor::new(&image_bytes)).with_guessed_format();
+                                if let Ok(reader) = img_reader {
+                                    if let Ok(img) = reader.decode() {
+                                        let rgba_img = img.to_rgba8();
+                                        match image_processing::animate_image_effect(&rgba_img, &effect) {
+                                            Ok(gif_bytes) => {
+                                                let filename = crate::utils::sanitize_filename(&format!("animation_{}.gif", effect), "gif");
+                                                let attachment_data = serenity::builder::CreateAttachment::bytes(gif_bytes, filename);
+                                                let message_content = format!("**Animation Effect: {}**", effect);
+                                        let message_builder = serenity::builder::CreateMessage::new().content(message_content);
+                                        let _ = msg.channel_id.send_files(&ctx.http, vec![attachment_data], message_builder).await;
+                                                progress_bar.finish_with_message("✅ Animation sent!");
+                                        return;
+                                    }
+                                            Err(e) => {
+                                                progress_bar.finish_with_message("❌ Failed to generate animation");
+                                                let _ = msg.channel_id.say(&ctx.http, &format!("Failed to generate animation: {}", e)).await;
+                                                return;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        progress_bar.finish_with_message("❌ Failed to generate animation");
+                        let _ = msg.channel_id.say(&ctx.http, "Failed to generate animation. Please ensure your image is valid and accessible.").await;
+                        return;
+                    } else {
+                        let _ = msg.channel_id.say(&ctx.http, "Please attach an image or provide a direct image URL to animate.").await;
+                        return;
+                    }
+                } else if parts[1] == "texture" {
+                    // --- TEXTURE OVERLAY SUBCOMMAND ---
+                    // Usage: !cat texture [type] [image]
+                    let texture_type = parts.get(2).map(|s| s.to_lowercase()).unwrap_or("dots".to_string());
+                    let valid_types = ["dots", "stripes"];
+                    if !valid_types.contains(&texture_type.as_str()) {
+                        let _ = msg.channel_id.say(&ctx.http, "Please specify a valid texture type: dots, stripes.").await;
+                        return;
+                    }
+                    let attachment = msg.attachments.iter().find(|a| a.width.is_some() && a.height.is_some());
+                    let image_url = if let Some(attachment) = attachment {
+                        Some(attachment.url.as_str().to_string())
+                    } else {
+                        let url_regex = regex::Regex::new(r"^(https?://[\w\-./%?=&]+\.(png|jpe?g|gif|bmp|webp))$").unwrap();
+                        parts.iter().find(|s| url_regex.is_match(s)).map(|s| s.to_string())
+                    };
+                    if let Some(image_url) = image_url {
+                        let _typing = msg.channel_id.start_typing(&ctx.http);
+                        let progress_bar = ProgressBar::new_spinner();
+                        progress_bar.set_style(
+                            ProgressStyle::default_spinner()
+                                .template("{spinner:.green} {wide_msg}")
+                                .unwrap()
+                        );
+                        progress_bar.set_message("🖌️ Applying Catppuccin texture overlay...");
+                        progress_bar.enable_steady_tick(Duration::from_millis(100));
+                        let response = reqwest::get(&image_url).await;
+                        if let Ok(resp) = response {
+                            let bytes = resp.bytes().await;
+                            if let Ok(image_bytes) = bytes {
+                                let img_reader = ImageReader::new(std::io::Cursor::new(&image_bytes)).with_guessed_format();
+                                if let Ok(reader) = img_reader {
+                                    if let Ok(img) = reader.decode() {
+                                        let rgba_img = img.to_rgba8();
+                                        let flavor = crate::utils::parse_flavor("latte").unwrap(); // Default to Latte for now
+                                        let textured_img = image_processing::overlay_catppuccin_texture(&rgba_img, &texture_type, flavor);
+                                        let mut output_buffer = std::io::Cursor::new(Vec::new());
+                                        if let Err(_e) = textured_img.write_to(&mut output_buffer, image::ImageFormat::Png) {
+                                            progress_bar.finish_with_message("❌ Failed to generate texture overlay image");
+                                            let _ = msg.channel_id.say(&ctx.http, "Failed to generate texture overlay image.").await;
+                                            return;
+                                        }
+                                        let filename = crate::utils::sanitize_filename(&format!("catppuccin_texture_{}.png", texture_type), "png");
+                                        let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), filename);
+                                        let message_content = format!("**Catppuccin Texture Overlay: {}**", texture_type);
+                                        let message_builder = serenity::builder::CreateMessage::new().content(message_content);
+                                        let _ = msg.channel_id.send_files(&ctx.http, vec![attachment_data], message_builder).await;
+                                        progress_bar.finish_with_message("✅ Texture overlay image sent!");
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        progress_bar.finish_with_message("❌ Failed to apply texture overlay");
+                        let _ = msg.channel_id.say(&ctx.http, "Failed to apply texture overlay. Please ensure your image is valid and accessible.").await;
+                        return;
+                    } else {
+                        let _ = msg.channel_id.say(&ctx.http, "Please attach an image or provide a direct image URL to apply a texture overlay.").await;
+                        return;
+                    }
                 } else if let Some(flavor) = utils::parse_flavor(parts[1]) {
                     selected_flavor = flavor;
                     has_explicit_flavor_arg = true;
@@ -494,7 +1040,22 @@ impl EventHandler for Handler {
                     stats_message.push_str(&format!("\n**Suggested Flavor:** {}\n", suggested_flavor.to_string().to_uppercase()));
                     stats_message.push_str("\n*Based on average brightness of dominant colors*");
                     progress_bar.finish_with_message("✅ Color analysis completed");
-                    let _ = msg.channel_id.say(&ctx.http, stats_message).await;
+                    // Store the image and context for confirmation
+                    let mut buf = Vec::new();
+                    img.write_to(&mut buf, image::ImageFormat::Png).unwrap();
+                    {
+                        let mut map = COLOR_CONFIRM_MAP.lock().unwrap();
+                        map.insert((msg.author.id.0, msg.channel_id.0), (buf, image::ImageFormat::Png, width, height, suggested_flavor, selected_algorithm.to_string()));
+                    }
+                    // Send stats message with button
+                    let mut action_row = CreateActionRow::default();
+                    action_row.add_button(CreateButton::new("apply_suggested_flavor")
+                        .label(format!("Apply {}", suggested_flavor.to_string().to_uppercase()))
+                        .style(serenity::model::prelude::component::ButtonStyle::Primary));
+                    let builder = serenity::builder::CreateMessage::new()
+                        .content(stats_message)
+                        .components(vec![action_row]);
+                    let _ = msg.channel_id.send_message(&ctx.http, builder).await;
                     return;
                 }
 
@@ -607,6 +1168,40 @@ impl EventHandler for Handler {
         ];
         for channel_id in channel_ids.iter() {
             let _ = channel_id.say(&ctx.http, "🟢 Catppuccinifier Bot is now online!").await;
+        }
+    }
+    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+        if let Interaction::MessageComponent(component) = interaction {
+            if component.data.custom_id == "apply_suggested_flavor" {
+                let user_id = component.user.id.0;
+                let channel_id = component.channel_id.0;
+                let mut map = COLOR_CONFIRM_MAP.lock().unwrap();
+                if let Some((img_bytes, img_format, width, height, flavor, algorithm)) = map.remove(&(user_id, channel_id)) {
+                    // Decode image
+                    let img = image::load_from_memory_with_format(&img_bytes, img_format).unwrap();
+                    let mut rgba_img = img.to_rgba8();
+                    let lut = image_processing::generate_catppuccin_lut(flavor, &algorithm);
+                    image_processing::apply_lut_to_image(&mut rgba_img, &lut);
+                    let mut output_buffer = std::io::Cursor::new(Vec::new());
+                    let output_format = image::ImageFormat::Png;
+                    let dynamic_img = image::DynamicImage::ImageRgba8(rgba_img);
+                    dynamic_img.write_to(&mut output_buffer, output_format).unwrap();
+                    let filename = utils::sanitize_filename(&format!("catppuccinified_{}.png", flavor.to_string().to_lowercase()), "png");
+                    let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), filename);
+                    let message_content = format!("Here's your Catppuccinified image (Flavor: {})!", flavor.to_string().to_uppercase());
+                    let message_builder = serenity::builder::CreateMessage::new().content(message_content);
+                    let _ = component.create_interaction_response(&ctx.http, |r| {
+                        r.kind(InteractionResponseType::ChannelMessageWithSource)
+                            .interaction_response_data(|d| d.content(":art: Applying suggested flavor...").ephemeral(true))
+                    }).await;
+                    let _ = component.channel_id.send_files(&ctx.http, vec![attachment_data], message_builder).await;
+                } else {
+                    let _ = component.create_interaction_response(&ctx.http, |r| {
+                        r.kind(InteractionResponseType::ChannelMessageWithSource)
+                            .interaction_response_data(|d| d.content("No pending color analysis found.").ephemeral(true))
+                    }).await;
+                }
+            }
         }
     }
 } 

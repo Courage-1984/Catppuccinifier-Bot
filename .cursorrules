@@ -1,0 +1,43 @@
+# Catppuccinifier Bot Cursor Rules
+
+## Advanced Color Analysis & Creative Features
+
+The following advanced and creative features are integrated and must be documented and maintained:
+
+- `!cat extract [image]`: Extracts the actual color palette from an image and displays a swatch grid and hex codes.
+- `!cat harmony [image]`: Analyzes the dominant color and shows complementary, analogous, and triadic color harmonies as swatches and hex codes.
+- `!cat simulate [type] [image]`: Simulates color blindness. Supported types: `protanopia`, `deuteranopia`, `tritanopia`. Applies the appropriate color transformation matrix and returns the simulated image.
+- `!cat temperature [image]`: Analyzes the image and reports the percentage of warm vs cool colors based on pixel hue.
+- `!cat gradient [colors]`: Generates a gradient image from Catppuccin color names or hex codes. Example: `!cat gradient rosewater mauve blue` or `!cat gradient #f5e0dc #a6e3a1`.
+- `!cat scheme [type] [image]`: Analyzes the dominant color and previews color schemes. Supported types: `monochromatic`, `complementary`, `analogous`, `triadic`. Example: `!cat scheme complementary [image]`.
+- `!cat animate [effect] [image]`: Adds animation effects to images. Supported effect: `fade`. Example: `!cat animate fade [image]`.
+- `!cat texture [type] [image]`: Overlays Catppuccin-themed textures on images. Supported types: `dots`, `stripes`. Example: `!cat texture dots [image]`.
+
+## Help Command
+
+- The `!cat -h` and `!cat help` output must always include all advanced color analysis and creative features and their usage, as listed above.
+- Any future features should be added to the help output and documented here.
+
+### Example Help Output (must include all features):
+
+```
+!cat extract [image]      - Extract the actual color palette from an image
+!cat harmony [image]      - Show complementary, analogous, triadic colors for the dominant color
+!cat simulate [type] [image] - Simulate color blindness (protanopia, deuteranopia, tritanopia)
+!cat temperature [image]  - Analyze and report the proportion of warm vs cool colors
+!cat gradient [colors]    - Generate a gradient from Catppuccin color names or hex codes
+!cat scheme [type] [image] - Preview color schemes (complementary, analogous, triadic, monochromatic)
+!cat animate [effect] [image] - Add animation effects (e.g., fade) to images as GIF
+!cat texture [type] [image] - Overlay Catppuccin-themed textures (dots, stripes) on images
+```
+
+## Integration Points
+
+- All new features are implemented as subcommands in the main message handler (`src/commands.rs`).
+- Color analysis and creative logic is implemented inline or as helpers in `src/commands.rs` or `src/image_processing.rs`.
+- If refactoring, consider moving reusable color logic to a utility module.
+
+## Documentation
+
+- The README.md must always reflect all available commands, including advanced analysis and creative features.
+- Update this file and the README whenever new user-facing features are added.

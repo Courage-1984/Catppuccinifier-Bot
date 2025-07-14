@@ -273,6 +273,104 @@ pub fn process_gif_with_palette(gif_bytes: &[u8], flavor: catppuccin::FlavorName
     Ok(output)
 }
 
+/// Generate a simple animation effect (e.g., fade in/out) as a GIF from a static image
+pub fn animate_image_effect(img: &image::RgbaImage, effect: &str) -> Result<Vec<u8>, String> {
+    let width = img.width() as u16;
+    let height = img.height() as u16;
+    let mut frames = Vec::new();
+    let n_frames = 12;
+    match effect {
+        "fade" | "fadein" | "fade-in" => {
+            for i in 0..n_frames {
+                let alpha = ((i as f32) / (n_frames as f32 - 1.0) * 255.0).round() as u8;
+                let mut frame_img = img.clone();
+                for pixel in frame_img.pixels_mut() {
+                    pixel[3] = alpha;
+                }
+                let mut frame = gif::Frame::from_rgba_speed(width, height, &mut frame_img.clone().into_raw(), 10);
+                frame.delay = 4; // ~40ms per frame
+                frames.push(frame);
+            }
+        }
+        // Add more effects here (e.g., slide, pulse)
+        _ => return Err(format!("Unknown animation effect: {}", effect)),
+    }
+    // Encode as GIF
+    let mut output = Vec::new();
+    if let Some(first_frame) = frames.first() {
+        let mut encoder = gif::Encoder::new(&mut output, width, height, &[])
+            .map_err(|e| format!("Failed to create GIF encoder: {e}"))?;
+        encoder.set_repeat(gif::Repeat::Infinite).map_err(|e| format!("Failed to set GIF repeat: {e}"))?;
+        for frame in frames {
+            encoder.write_frame(&frame).map_err(|e| format!("Failed to write GIF frame: {e}"))?;
+        }
+    }
+    Ok(output)
+}
+
+/// Overlay a Catppuccin-themed texture (dots, stripes, etc.) on an image
+pub fn overlay_catppuccin_texture(
+    img: &image::RgbaImage,
+    texture_type: &str,
+    flavor: catppuccin::FlavorName,
+) -> image::RgbaImage {
+    let (width, height) = img.dimensions();
+    let mut out = img.clone();
+    let colors_struct = match flavor {
+        catppuccin::FlavorName::Latte => &catppuccin::PALETTE.latte.colors,
+        catppuccin::FlavorName::Frappe => &catppuccin::PALETTE.frappe.colors,
+        catppuccin::FlavorName::Macchiato => &catppuccin::PALETTE.macchiato.colors,
+        catppuccin::FlavorName::Mocha => &catppuccin::PALETTE.mocha.colors,
+    };
+    match texture_type {
+        "dots" => {
+            let dot_color = image::Rgba([colors_struct.mauve.rgb.r, colors_struct.mauve.rgb.g, colors_struct.mauve.rgb.b, 80]);
+            let spacing = 24;
+            let radius = 6;
+            for y in (0..height).step_by(spacing) {
+                for x in (0..width).step_by(spacing) {
+                    for dy in 0..(radius * 2) {
+                        for dx in 0..(radius * 2) {
+                            let px = x as i32 + dx - radius as i32;
+                            let py = y as i32 + dy - radius as i32;
+                            if px >= 0 && py >= 0 && px < width as i32 && py < height as i32 {
+                                let dist = ((dx as i32 - radius as i32).pow(2) + (dy as i32 - radius as i32).pow(2)) as f32;
+                                if dist <= (radius as f32).powi(2) {
+                                    let base = out.get_pixel_mut(px as u32, py as u32);
+                                    let alpha = dot_color[3] as f32 / 255.0;
+                                    for c in 0..3 {
+                                        base[c] = ((1.0 - alpha) * base[c] as f32 + alpha * dot_color[c] as f32).round() as u8;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        "stripes" => {
+            let stripe_color = image::Rgba([colors_struct.blue.rgb.r, colors_struct.blue.rgb.g, colors_struct.blue.rgb.b, 60]);
+            let stripe_width = 16;
+            for y in 0..height {
+                if (y / stripe_width) % 2 == 0 {
+                    for x in 0..width {
+                        let base = out.get_pixel_mut(x, y);
+                        let alpha = stripe_color[3] as f32 / 255.0;
+                        for c in 0..3 {
+                            base[c] = ((1.0 - alpha) * base[c] as f32 + alpha * stripe_color[c] as f32).round() as u8;
+                        }
+                    }
+                }
+            }
+        }
+        // Add more patterns here (e.g., grid, noise)
+        _ => {
+            // No overlay for unknown type
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

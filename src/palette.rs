@@ -46,9 +46,9 @@ pub fn generate_all_palettes_preview() -> RgbaImage {
     let flavors = [FlavorName::Latte, FlavorName::Frappe, FlavorName::Macchiato, FlavorName::Mocha];
     let swatch_size: u32 = 40;
     let margin: u32 = 5;
-    let colors_per_flavor: u32 = 16;
-    let grid_cols: u32 = 4;
-    let grid_rows: u32 = colors_per_flavor;
+    let colors_per_flavor: u32 = 26;
+    let grid_cols: u32 = 5;
+    let grid_rows: u32 = 6; // 5x6=30, enough for 26 colors
     let flavor_width = grid_cols * swatch_size + (grid_cols + 1) * margin;
     let flavor_height = grid_rows * swatch_size + (grid_rows + 1) * margin + 30;
     let total_width = flavor_width * 4 + margin * 5;
@@ -67,7 +67,10 @@ pub fn generate_all_palettes_preview() -> RgbaImage {
             colors_struct.peach, colors_struct.yellow, colors_struct.green,
             colors_struct.teal, colors_struct.sky, colors_struct.sapphire,
             colors_struct.blue, colors_struct.lavender, colors_struct.text,
-            colors_struct.subtext1,
+            colors_struct.subtext1, colors_struct.subtext0, colors_struct.overlay2,
+            colors_struct.overlay1, colors_struct.overlay0, colors_struct.surface2,
+            colors_struct.surface1, colors_struct.surface0, colors_struct.base,
+            colors_struct.mantle, colors_struct.crust,
         ];
         let flavor_x = margin + (flavor_idx as u32) * (flavor_width + margin);
         for i in 0..flavor_width {
@@ -85,6 +88,38 @@ pub fn generate_all_palettes_preview() -> RgbaImage {
                     img.put_pixel(px, py, Rgba([color.rgb.r, color.rgb.g, color.rgb.b, 255]));
                 }
             }
+        }
+    }
+    img
+}
+
+/// Generate a horizontal gradient image from a list of RGB tuples
+pub fn generate_gradient_image(colors: &[(u8, u8, u8)], width: u32, height: u32) -> image::RgbaImage {
+    let n = colors.len();
+    let mut img = image::RgbaImage::new(width, height);
+    if n == 0 {
+        return img;
+    }
+    for x in 0..width {
+        // Determine which segment this x falls into
+        let t = x as f32 / (width - 1) as f32;
+        let seg = if n == 1 {
+            0
+        } else {
+            ((t * (n as f32 - 1.0)).floor() as usize).min(n - 2)
+        };
+        let local_t = if n == 1 {
+            0.0
+        } else {
+            (t * (n as f32 - 1.0)) - seg as f32
+        };
+        let (r1, g1, b1) = colors[seg];
+        let (r2, g2, b2) = if seg + 1 < n { colors[seg + 1] } else { colors[seg] };
+        let r = (r1 as f32 * (1.0 - local_t) + r2 as f32 * local_t).round() as u8;
+        let g = (g1 as f32 * (1.0 - local_t) + g2 as f32 * local_t).round() as u8;
+        let b = (b1 as f32 * (1.0 - local_t) + b2 as f32 * local_t).round() as u8;
+        for y in 0..height {
+            img.put_pixel(x, y, image::Rgba([r, g, b, 255]));
         }
     }
     img

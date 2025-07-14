@@ -82,6 +82,15 @@ Invite the bot to your server and use the `!cat` command. The bot responds to co
 
 ### Advanced Usage & Command Variants
 
+- **Color Schemes:**
+  - Analyze and preview color schemes based on the dominant color of an image:
+    ```
+    !cat scheme complementary [image]
+    !cat scheme analogous [image]
+    !cat scheme triadic [image]
+    !cat scheme monochromatic [image]
+    ```
+  - Supported types: `complementary`, `analogous`, `triadic`, `monochromatic`.
 - **Batch Processing:**
   - Attach multiple images and type:
     ```
@@ -160,27 +169,48 @@ Invite the bot to your server and use the `!cat` command. The bot responds to co
     !cat -h
     ```
 
+### **Advanced Color Analysis**
+
+- **Color Palette Extraction**: `!cat extract [image]` - Extract the actual color palette from an image
+- **Color Harmony Analysis**: `!cat harmony [image]` - Show complementary, analogous, triadic colors
+- **Color Blindness Simulation**: `!cat simulate [type] [image]` - Show how image looks to colorblind users (`protanopia`, `deuteranopia`, `tritanopia`)
+- **Color Temperature Analysis**: `!cat temperature [image]` - Analyze warm vs cool colors
+
+### Advanced Usage & Command Variants
+
+- **Texture Overlays:**
+  - Overlay Catppuccin-themed textures on images:
+    ```
+    !cat texture dots [image]
+    !cat texture stripes [image]
+    ```
+  - Supported types: `dots`, `stripes`.
+
 ### All Commands Table
 
-| Command                             | Description                               |
-| ----------------------------------- | ----------------------------------------- | ----------------------- |
-| `!cat [image]`                      | Process image with default Latte flavor   |
-| `!cat [flavor] [image]`             | Process image with specific flavor        |
-| `!cat [flavor] [algorithm] [image]` | Use a specific algorithm                  |
-| `!cat [flavor] [quality] [image]`   | Use a quality preset (fast, normal, high) |
-| `!cat [flavor] [format] [image]`    | Export as PNG, JPG, WEBP, GIF             |
-| `!cat all [image]`                  | Process with all flavors                  |
-| `!cat batch [images]`               | Batch process multiple images             |
-| `!cat palette [flavor               | all]`                                     | Show palette preview(s) |
-| `!cat compare [image]`              | Before/after comparison                   |
-| `!cat stats [image]`                | Show dominant colors and suggest flavor   |
-| `!cat #HEX`                         | Convert hex color to Catppuccin           |
-| `!cat [flavor] #HEX`                | Convert hex color for a specific flavor   |
-| `!cat list`                         | List all flavors, algorithms, formats     |
-| `!cat cancel`                       | Cancel your current job                   |
-| `!cat random`                       | Get a random Catppuccin color             |
-| `!cat random palette`               | Get a random palette preview              |
-| `!cat help`                         | Show help message                         |
+| Command                             | Description                                                              |
+| ----------------------------------- | ------------------------------------------------------------------------ | ----------------------- |
+| `!cat [image]`                      | Process image with default Latte flavor                                  |
+| `!cat [flavor] [image]`             | Process image with specific flavor                                       |
+| `!cat [flavor] [algorithm] [image]` | Use a specific algorithm                                                 |
+| `!cat [flavor] [quality] [image]`   | Use a quality preset (fast, normal, high)                                |
+| `!cat [flavor] [format] [image]`    | Export as PNG, JPG, WEBP, GIF                                            |
+| `!cat all [image]`                  | Process with all flavors                                                 |
+| `!cat batch [images]`               | Batch process multiple images                                            |
+| `!cat palette [flavor               | all]`                                                                    | Show palette preview(s) |
+| `!cat compare [image]`              | Before/after comparison                                                  |
+| `!cat stats [image]`                | Show dominant colors and suggest flavor                                  |
+| `!cat #HEX`                         | Convert hex color to Catppuccin                                          |
+| `!cat [flavor] #HEX`                | Convert hex color for a specific flavor                                  |
+| `!cat list`                         | List all flavors, algorithms, formats                                    |
+| `!cat cancel`                       | Cancel your current job                                                  |
+| `!cat random`                       | Get a random Catppuccin color                                            |
+| `!cat random palette`               | Get a random palette preview                                             |
+| `!cat help`                         | Show help message                                                        |
+| `!cat gradient [colors]`            | Generate a gradient from Catppuccin color names or hex codes             |
+| `!cat scheme [type] [image]`        | Preview color schemes (complementary, analogous, triadic, monochromatic) |
+| `!cat animate [effect] [image]`     | Add animation effects (e.g., fade) to images as GIF                      |
+| `!cat texture [type] [image]`       | Overlay Catppuccin-themed textures (dots, stripes) on images             |
 
 ---
 
@@ -278,3 +308,31 @@ Pull requests and issues are welcome! Please open an issue to discuss major chan
 ## 📜 License
 
 MIT License. See [LICENSE](LICENSE) for details.
+
+## 📝 Help Command Output
+
+The `!cat -h` or `!cat help` command now includes:
+
+- `!cat extract [image]` — Extract the actual color palette from an image
+- `!cat harmony [image]` — Show complementary, analogous, triadic colors for the dominant color
+- `!cat simulate [type] [image]` — Simulate color blindness (`protanopia`, `deuteranopia`, `tritanopia`)
+- `!cat temperature [image]` — Analyze and report the proportion of warm vs cool colors
+- `!cat gradient [colors]` — Generate a gradient from Catppuccin color names or hex codes
+- `!cat scheme [type] [image]` — Preview color schemes (complementary, analogous, triadic, monochromatic)
+- `!cat animate [effect] [image]` — Add animation effects (e.g., fade) to images as GIF
+- `!cat texture [type] [image]` — Overlay Catppuccin-themed textures (dots, stripes) on images
+
+(These are in addition to all previously documented features.)
+
+### Example Help Output
+
+```
+!cat extract [image]      - Extract the actual color palette from an image
+!cat harmony [image]      - Show complementary, analogous, triadic colors for the dominant color
+!cat simulate [type] [image] - Simulate color blindness (protanopia, deuteranopia, tritanopia)
+!cat temperature [image]  - Analyze and report the proportion of warm vs cool colors
+!cat gradient [colors]    - Generate a gradient from Catppuccin color names or hex codes
+!cat scheme [type] [image] - Preview color schemes (complementary, analogous, triadic, monochromatic)
+!cat animate [effect] [image] - Add animation effects (e.g., fade) to images as GIF
+!cat texture [type] [image] - Overlay Catppuccin-themed textures (dots, stripes) on images
+```

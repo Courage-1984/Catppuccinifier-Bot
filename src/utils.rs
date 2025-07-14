@@ -60,9 +60,9 @@ pub fn parse_format(s: &str) -> Option<ImageFormat> {
 }
 
 // Find closest Catppuccin color for a given hex string
-pub fn find_closest_catppuccin_hex(input_hex: &str, _flavor: FlavorName) -> Option<(String, String)> {
+pub fn find_closest_catppuccin_hex(input_hex: &str, flavor: FlavorName) -> Option<(String, String)> {
     let hex_str = input_hex.trim_start_matches('#');
-    let (_r, _g, _b) = if hex_str.len() == 6 {
+    let (r, g, b) = if hex_str.len() == 6 {
         (
             u8::from_str_radix(&hex_str[0..2], 16).ok()?,
             u8::from_str_radix(&hex_str[2..4], 16).ok()?,
@@ -77,9 +77,101 @@ pub fn find_closest_catppuccin_hex(input_hex: &str, _flavor: FlavorName) -> Opti
     } else {
         return None;
     };
-    // Use LUT for hex color conversion too
-    // This will be updated to call image_processing::generate_catppuccin_lut after migration
-    None // Placeholder, update after moving LUT logic
+    let colors_struct = match flavor {
+        FlavorName::Latte => &catppuccin::PALETTE.latte.colors,
+        FlavorName::Frappe => &catppuccin::PALETTE.frappe.colors,
+        FlavorName::Macchiato => &catppuccin::PALETTE.macchiato.colors,
+        FlavorName::Mocha => &catppuccin::PALETTE.mocha.colors,
+    };
+    let palette = [
+        ("rosewater", colors_struct.rosewater), ("flamingo", colors_struct.flamingo), ("pink", colors_struct.pink),
+        ("mauve", colors_struct.mauve), ("red", colors_struct.red), ("maroon", colors_struct.maroon),
+        ("peach", colors_struct.peach), ("yellow", colors_struct.yellow), ("green", colors_struct.green),
+        ("teal", colors_struct.teal), ("sky", colors_struct.sky), ("sapphire", colors_struct.sapphire),
+        ("blue", colors_struct.blue), ("lavender", colors_struct.lavender), ("text", colors_struct.text),
+        ("subtext1", colors_struct.subtext1), ("subtext0", colors_struct.subtext0), ("overlay2", colors_struct.overlay2),
+        ("overlay1", colors_struct.overlay1), ("overlay0", colors_struct.overlay0), ("surface2", colors_struct.surface2),
+        ("surface1", colors_struct.surface1), ("surface0", colors_struct.surface0), ("base", colors_struct.base),
+        ("mantle", colors_struct.mantle), ("crust", colors_struct.crust),
+    ];
+    let mut min_dist = f32::MAX;
+    let mut closest = &palette[0];
+    for (name, color) in &palette {
+        let dr = *r as f32 - color.rgb.r as f32;
+        let dg = *g as f32 - color.rgb.g as f32;
+        let db = *b as f32 - color.rgb.b as f32;
+        let dist = dr * dr + dg * dg + db * db;
+        if dist < min_dist {
+            min_dist = dist;
+            closest = &(*name, *color);
+        }
+    }
+    let hex = format!("{:02X}{:02X}{:02X}", closest.1.rgb.r, closest.1.rgb.g, closest.1.rgb.b);
+    Some((closest.0.to_string(), hex))
+}
+
+// Parse a Catppuccin color name to its RGB tuple for a given flavor
+pub fn catppuccin_color_name_to_rgb(name: &str, flavor: FlavorName) -> Option<(u8, u8, u8)> {
+    let colors_struct = match flavor {
+        FlavorName::Latte => &catppuccin::PALETTE.latte.colors,
+        FlavorName::Frappe => &catppuccin::PALETTE.frappe.colors,
+        FlavorName::Macchiato => &catppuccin::PALETTE.macchiato.colors,
+        FlavorName::Mocha => &catppuccin::PALETTE.mocha.colors,
+    };
+    match name.to_lowercase().as_str() {
+        "rosewater" => Some((colors_struct.rosewater.rgb.r, colors_struct.rosewater.rgb.g, colors_struct.rosewater.rgb.b)),
+        "flamingo" => Some((colors_struct.flamingo.rgb.r, colors_struct.flamingo.rgb.g, colors_struct.flamingo.rgb.b)),
+        "pink" => Some((colors_struct.pink.rgb.r, colors_struct.pink.rgb.g, colors_struct.pink.rgb.b)),
+        "mauve" => Some((colors_struct.mauve.rgb.r, colors_struct.mauve.rgb.g, colors_struct.mauve.rgb.b)),
+        "red" => Some((colors_struct.red.rgb.r, colors_struct.red.rgb.g, colors_struct.red.rgb.b)),
+        "maroon" => Some((colors_struct.maroon.rgb.r, colors_struct.maroon.rgb.g, colors_struct.maroon.rgb.b)),
+        "peach" => Some((colors_struct.peach.rgb.r, colors_struct.peach.rgb.g, colors_struct.peach.rgb.b)),
+        "yellow" => Some((colors_struct.yellow.rgb.r, colors_struct.yellow.rgb.g, colors_struct.yellow.rgb.b)),
+        "green" => Some((colors_struct.green.rgb.r, colors_struct.green.rgb.g, colors_struct.green.rgb.b)),
+        "teal" => Some((colors_struct.teal.rgb.r, colors_struct.teal.rgb.g, colors_struct.teal.rgb.b)),
+        "sky" => Some((colors_struct.sky.rgb.r, colors_struct.sky.rgb.g, colors_struct.sky.rgb.b)),
+        "sapphire" => Some((colors_struct.sapphire.rgb.r, colors_struct.sapphire.rgb.g, colors_struct.sapphire.rgb.b)),
+        "blue" => Some((colors_struct.blue.rgb.r, colors_struct.blue.rgb.g, colors_struct.blue.rgb.b)),
+        "lavender" => Some((colors_struct.lavender.rgb.r, colors_struct.lavender.rgb.g, colors_struct.lavender.rgb.b)),
+        "text" => Some((colors_struct.text.rgb.r, colors_struct.text.rgb.g, colors_struct.text.rgb.b)),
+        "subtext1" => Some((colors_struct.subtext1.rgb.r, colors_struct.subtext1.rgb.g, colors_struct.subtext1.rgb.b)),
+        "subtext0" => Some((colors_struct.subtext0.rgb.r, colors_struct.subtext0.rgb.g, colors_struct.subtext0.rgb.b)),
+        "overlay2" => Some((colors_struct.overlay2.rgb.r, colors_struct.overlay2.rgb.g, colors_struct.overlay2.rgb.b)),
+        "overlay1" => Some((colors_struct.overlay1.rgb.r, colors_struct.overlay1.rgb.g, colors_struct.overlay1.rgb.b)),
+        "overlay0" => Some((colors_struct.overlay0.rgb.r, colors_struct.overlay0.rgb.g, colors_struct.overlay0.rgb.b)),
+        "surface2" => Some((colors_struct.surface2.rgb.r, colors_struct.surface2.rgb.g, colors_struct.surface2.rgb.b)),
+        "surface1" => Some((colors_struct.surface1.rgb.r, colors_struct.surface1.rgb.g, colors_struct.surface1.rgb.b)),
+        "surface0" => Some((colors_struct.surface0.rgb.r, colors_struct.surface0.rgb.g, colors_struct.surface0.rgb.b)),
+        "base" => Some((colors_struct.base.rgb.r, colors_struct.base.rgb.g, colors_struct.base.rgb.b)),
+        "mantle" => Some((colors_struct.mantle.rgb.r, colors_struct.mantle.rgb.g, colors_struct.mantle.rgb.b)),
+        "crust" => Some((colors_struct.crust.rgb.r, colors_struct.crust.rgb.g, colors_struct.crust.rgb.b)),
+        _ => None,
+    }
+}
+
+// Sanitize a filename for safe output (removes dangerous characters, enforces extension, limits length)
+pub fn sanitize_filename(filename: &str, default_ext: &str) -> String {
+    use regex::Regex;
+    // Remove any path separators and non-printable characters
+    let re = Regex::new(r#"[^A-Za-z0-9._-]"#).unwrap();
+    let mut name = re.replace_all(filename, "_").to_string();
+    // Remove leading/trailing dots/underscores/hyphens
+    name = name.trim_matches(|c: char| c == '.' || c == '_' || c == '-').to_string();
+    // Limit length
+    if name.len() > 64 {
+        name.truncate(64);
+    }
+    // Ensure extension
+    if !name.contains('.') {
+        name.push('.');
+        name.push_str(default_ext);
+    } else if let Some(ext) = name.split('.').last() {
+        if ext.len() > 8 || ext.is_empty() {
+            name.push('.');
+            name.push_str(default_ext);
+        }
+    }
+    name
 }
 
 #[allow(dead_code)]

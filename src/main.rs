@@ -98,7 +98,8 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
                     let _ = msg.channel_id.say(&ctx, "❌ Failed to generate palette preview. Please try again later.").await;
                     return Ok(());
                 }
-                let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), "catppuccin_palettes_all.png");
+                let filename = utils::sanitize_filename("catppuccin_palettes_all.png", "png");
+                let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), filename);
                 let message_content = "**All Catppuccin Color Palettes**\nFrom left to right: Latte, Frappe, Macchiato, Mocha";
                 let message_builder = serenity::builder::CreateMessage::new().content(message_content);
                 let progress_msg = "📤 Uploading all palette previews...";
@@ -121,7 +122,7 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
                     let _ = msg.channel_id.say(&ctx, "❌ Failed to generate palette preview. Please try again later.").await;
                     return Ok(());
                 }
-                let filename = format!("catppuccin_palette_{}.png", flavor_enum.to_string().to_lowercase());
+                let filename = utils::sanitize_filename(&format!("catppuccin_palette_{}.png", flavor_enum.to_string().to_lowercase()), "png");
                 let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), filename);
                 let message_content = format!("**Catppuccin {} Color Palette**", flavor_enum.to_string().to_uppercase());
                 let message_builder = serenity::builder::CreateMessage::new().content(message_content);
@@ -232,7 +233,7 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
                 let _ = msg.channel_id.say(&ctx, "❌ Failed to generate palette preview.").await;
                 return Ok(());
             }
-            let filename = format!("catppuccin_palette_{}.png", flavor);
+            let filename = utils::sanitize_filename(&format!("catppuccin_palette_{}.png", flavor), "png");
             let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), filename);
             let message_content = format!("**Random Catppuccin Palette: {}**", flavor.to_uppercase());
             let message_builder = serenity::builder::CreateMessage::new().content(message_content);
@@ -374,12 +375,7 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
                 failed_count += 1;
                 continue;
             }
-            let filename = format!("catppuccinified_{}_{}.", selected_flavor.to_string().to_lowercase(), attachment.filename);
-            let filename = if let Some(ext) = output_format.extensions_str().first() {
-                format!("{}{}", filename, ext)
-            } else {
-                format!("{}png", filename)
-            };
+            let filename = utils::sanitize_filename(&format!("catppuccinified_{}_{}.", selected_flavor.to_string().to_lowercase(), attachment.filename), output_format.extensions_str().first().unwrap_or(&"png"));
             let attachment_data = serenity::builder::CreateAttachment::bytes(output_buffer.into_inner(), filename);
             processed_attachments.push(attachment_data);
         }
@@ -412,24 +408,64 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
     }
     // Check for image URL in arguments
     let url_regex = Regex::new(r"^(https?://[\w\-./%?=&]+\.(png|jpe?g|gif|bmp|webp))$").unwrap();
+    let discord_msg_link_regex = Regex::new(r"^https://discord(?:app)?\.com/channels/(\d+)/(\d+)/(\d+)$").unwrap();
     let url_arg = parts.iter().find(|s| url_regex.is_match(s));
-    let mut image_url: Option<&str> = None;
+    let discord_link_arg = parts.iter().find(|s| discord_msg_link_regex.is_match(s));
+    let mut image_url: Option<String> = None;
+    let mut image_bytes: Option<bytes::Bytes> = None;
+    let mut image_filename: Option<String> = None;
     if let Some(&url) = url_arg {
         if url.len() > 300 {
             let _ = msg.channel_id.say(&ctx, "❌ Image URL is too long.").await;
             return Ok(());
         }
-        image_url = Some(url);
+        image_url = Some(url.to_string());
+    }
+    // If no direct image URL, check for Discord message link
+    else if let Some(&discord_link) = discord_link_arg {
+        if let Some(caps) = discord_msg_link_regex.captures(discord_link) {
+            let channel_id = caps.get(2).unwrap().as_str().parse::<u64>().ok();
+            let message_id = caps.get(3).unwrap().as_str().parse::<u64>().ok();
+            if let (Some(channel_id), Some(message_id)) = (channel_id, message_id) {
+                let channel_id = serenity::model::id::ChannelId(channel_id);
+                let message_id = serenity::model::id::MessageId(message_id);
+                match channel_id.message(&ctx.http, message_id).await {
+                    Ok(fetched_msg) => {
+                        // Try attachments first
+                        if let Some(attachment) = fetched_msg.attachments.iter().find(|a| a.width.is_some() && a.height.is_some() && a.content_type.as_deref().map_or(false, |s| s.starts_with("image/"))) {
+                            image_url = Some(attachment.url.clone());
+                            image_filename = Some(attachment.filename.clone());
+                        } else {
+                            // Try embeds (image or thumbnail)
+                            for embed in &fetched_msg.embeds {
+                                if let Some(url) = embed.image.as_ref().and_then(|img| img.url.as_ref()) {
+                                    image_url = Some(url.clone());
+                                    break;
+                                }
+                                if let Some(url) = embed.thumbnail.as_ref().and_then(|img| img.url.as_ref()) {
+                                    image_url = Some(url.clone());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = msg.channel_id.say(&ctx, format!("❌ Failed to fetch message from link: {e}")).await;
+                        return Ok(());
+                    }
+                }
+            }
+        }
     }
     let attachment = msg.attachments.iter().find(|a| a.width.is_some() && a.height.is_some());
-    let image_source = if let Some(url) = image_url {
-        Some(url)
-    } else if let Some(attachment) = attachment {
-        Some(attachment.url.as_str())
-                    } else {
+    let image_source = if let Some(attachment) = attachment {
+        Some((attachment.url.as_str().to_string(), Some(attachment.filename.clone())))
+    } else if let Some(url) = image_url {
+        Some((url, image_filename))
+    } else {
         None
     };
-    if let Some(image_url) = image_source {
+    if let Some((image_url, filename)) = image_source {
         info!(url = %image_url, "Processing image from URL or attachment");
         
         // Create progress bar for console output
@@ -480,7 +516,7 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
                         match processing_result {
                             Ok(Ok(gif_bytes)) => {
                                 progress_bar.set_message("✅ GIF processing completed successfully");
-                                let filename = format!("catppuccinified_{}.gif", selected_flavor.to_string().to_lowercase());
+                                let filename = utils::sanitize_filename(&format!("catppuccinified_{}.gif", selected_flavor.to_string().to_lowercase()), "gif");
                                 let attachment_data = serenity::builder::CreateAttachment::bytes(gif_bytes, filename);
                                 let message_content = format!("**Catppuccinified GIF with {}**", selected_flavor.to_string());
                                 let message_builder = serenity::builder::CreateMessage::new().content(message_content);
@@ -546,10 +582,10 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
                         match processing_result {
                             Ok(Ok(image_bytes)) => {
                                 progress_bar.set_message("✅ Image processing completed successfully");
-                                let filename = format!("catppuccinified_{}.png", selected_flavor.to_string().to_lowercase());
+                                let filename = utils::sanitize_filename(&format!("catppuccinified_{}.png", selected_flavor.to_string().to_lowercase()), "png");
                                 let attachment_data = serenity::builder::CreateAttachment::bytes(image_bytes, filename);
                                 let message_content = format!("**Catppuccinified with {}**", selected_flavor.to_string());
-                        let message_builder = serenity::builder::CreateMessage::new().content(message_content);
+                                let message_builder = serenity::builder::CreateMessage::new().content(message_content);
                                 progress_bar.set_message("📤 Uploading processed image...");
                                 if let Err(e) = msg.channel_id.send_files(&ctx, vec![attachment_data], message_builder).await {
                                     progress_bar.finish_with_message("❌ Failed to send processed image");
@@ -581,30 +617,29 @@ async fn cat(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
                     error!(url = %image_url, "Failed to decode image");
                     let _ = msg.channel_id.say(&ctx, "❌ Failed to decode the image. Please ensure your image is a supported format (PNG, JPEG, etc.) and not corrupted.").await;
                     return Ok(());
-                        } else {
+                } else {
                     progress_bar.finish_with_message("❌ Failed to create image reader");
                     error!(url = %image_url, "Failed to create image reader");
                     let _ = msg.channel_id.say(&ctx, "❌ Failed to read the image. Please try a different image or format.").await;
                     return Ok(());
-                    }
-                } else {
+                }
+            } else {
                 progress_bar.finish_with_message("❌ Failed to download image bytes");
                 error!(url = %image_url, "Failed to download image bytes");
                 let _ = msg.channel_id.say(&ctx, "❌ Failed to download the image. Please check the URL or try re-uploading your image.").await;
                 return Ok(());
-                        }
-                    } else {
+            }
+        } else {
             progress_bar.finish_with_message("❌ Failed to fetch image from URL");
             error!(url = %image_url, "Failed to fetch image from URL");
             let _ = msg.channel_id.say(&ctx, "❌ Failed to fetch the image from the provided URL. Please check the URL and try again.").await;
             return Ok(());
-                }
-            } else {
-        warn!(user = %msg.author.name, "No image attachment or valid URL found");
-        let _ = msg.channel_id.say(&ctx, "❌ No image attachment or valid image URL found. Please attach an image or provide a direct image URL (ending in .png, .jpg, .jpeg, .gif, .bmp, .webp).").await;
+        }
         return Ok(());
     }
-    // At the end of the function, the typing indicator will be dropped automatically
+    warn!(user = %msg.author.name, "No image attachment or valid URL found");
+    let _ = msg.channel_id.say(&ctx, "❌ No image attachment or valid image URL found. Please attach an image, provide a direct image URL (ending in .png, .jpg, .jpeg, .gif, .bmp, .webp), or a Discord message link containing an image.").await;
+    return Ok(());
 }
 
 #[tokio::main]
